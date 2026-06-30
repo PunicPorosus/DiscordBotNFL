@@ -1,0 +1,70 @@
+# Environment / secrets
+.env
+production.env
+
+# Claude / AI context files
+.claude/
+AI_CONTEXT.md
+NFL_Locks/_session_handoff.md
+
+# Old/archived cog version subdirectories
+NFL_Locks/cogs/1.00 cog files/
+NFL_Locks/cogs/old cog files post 1.00/
+
+# Versioned/leftover cog files sitting in the active cogs folder
+NFL_Locks/cogs/admin[0-9]*.py
+NFL_Locks/cogs/auto_tasks[0-9]*.py
+NFL_Locks/cogs/games_manager[0-9]*.py
+NFL_Locks/cogs/locks[0-9]*.py
+NFL_Locks/cogs/results_manager[0-9]*.py
+NFL_Locks/cogs/startup_coordinator[0-9]*.py
+NFL_Locks/cogs/winners[0-9]*.py
+NFL_Locks/cogs/NFLschedulePuller*.py
+NFL_Locks/cogs/migration.py
+NFL_Locks/cogs/help.py
+
+# Personal scripts and exports
+blah.py
+bot1.00.py
+NFLschedulePuller.py
+export_picks.py
+pull_emojis_script.py
+picks_export_*.xlsx
+
+# Internal documentation
+"Bot Documentation.txt"
+"Bot Documentation 1.01.txt"
+"Bot Documentation 1.02.txt"
+BOT_DOCUMENTATION.md
+TESTING_GUIDE.md
+
+# Bot runtime
+bot.pid
+
+# Root-level stray files
+full_schedule.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Bot runtime data (DB, JSON data files)
+NFL_Locks/data/
+data/
+
+# Pytest
+.pytest_cache/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
