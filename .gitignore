@@ -19,14 +19,12 @@ NFL_Locks/cogs/locks[0-9]*.py
 NFL_Locks/cogs/results_manager[0-9]*.py
 NFL_Locks/cogs/startup_coordinator[0-9]*.py
 NFL_Locks/cogs/winners[0-9]*.py
-NFL_Locks/cogs/NFLschedulePuller*.py
 NFL_Locks/cogs/migration.py
 NFL_Locks/cogs/help.py
 
 # Personal scripts and exports
 blah.py
 bot1.00.py
-NFLschedulePuller.py
 export_picks.py
 pull_emojis_script.py
 picks_export_*.xlsx
