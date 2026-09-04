@@ -94,21 +94,21 @@ class SeasonWrapup(commands.Cog):
         for i, (user, stats) in enumerate(top_5):
             medal = medals[i] if i < len(medals) else f"{i+1}."
             msg += (
-                f"{medal} **{user}** — {stats['total']} points "
+                f"{medal} **{user}**: {stats['total']} points "
                 f"({stats['weeks_with_points']} weeks)\n"
             )
 
         if best_week_user:
             msg += (
                 f"\n**Best Single Week Performance:**\n"
-                f"**{best_week_user}** — {best_week_score} points (Week {best_week})\n"
+                f"**{best_week_user}**: {best_week_score} points (Week {best_week})\n"
             )
 
         if most_consistent:
             user, stats = most_consistent
             msg += (
                 f"\n**Most Consistent Player:**\n"
-                f"**{user}** — Scored in {stats['weeks_with_points']}/{max_week} weeks\n"
+                f"**{user}**: Scored in {stats['weeks_with_points']}/{max_week} weeks\n"
             )
 
         msg += "\nThank you for playing! See you next season!"
@@ -116,7 +116,7 @@ class SeasonWrapup(commands.Cog):
         await rate_limiter.send(channel, msg)
         logger.info(f"Posted season wrap-up for {channel.guild.name}")
 
-    # _compute_scores removed — all scoring logic lives in utils/scoring.py
+    # _compute_scores removed, all scoring logic lives in utils/scoring.py
 
     # -- Admin command ---------------------------------------------------------
 

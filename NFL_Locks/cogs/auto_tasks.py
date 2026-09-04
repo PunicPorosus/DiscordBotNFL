@@ -97,7 +97,7 @@ class AutoTasks(commands.Cog):
                 continue
 
             # Check DB: skip if all configured guilds already have results posted.
-            # Must use an explicit loop — await inside a generator expression
+            # Must use an explicit loop, await inside a generator expression
             # passed to all() is not valid and produces wrong results.
             if not configured_guilds:
                 all_posted = False
@@ -152,7 +152,7 @@ class AutoTasks(commands.Cog):
 
             configured_guilds = await get_db().get_all_configured_guilds()
             if not configured_guilds:
-                logger.error("No configured guilds found — cannot post results")
+                logger.error("No configured guilds found, cannot post results")
                 return
 
             configured_channels = []
@@ -184,7 +184,7 @@ class AutoTasks(commands.Cog):
                         await self._post_games(channel, next_week, week_games)
                     await asyncio.sleep(2)
                 else:
-                    logger.info("End of season detected — posting season wrap-up...")
+                    logger.info("End of season detected, posting season wrap-up...")
                     await self._post_season_wrapup(channel)
                     await asyncio.sleep(2)
 
@@ -229,7 +229,7 @@ class AutoTasks(commands.Cog):
         if wrapup_cog:
             await wrapup_cog.post_season_wrapup(channel)
         else:
-            logger.warning("SeasonWrapup cog not found — skipping wrap-up post")
+            logger.warning("SeasonWrapup cog not found, skipping wrap-up post")
 
     async def _process_survivor_results(self, week_num) -> dict:
         """Run survivor week processing and return per-guild results."""

@@ -21,7 +21,7 @@ class MessageFetcher:
 
     def __init__(self, bot):
         self.bot = bot
-        # In-memory cache only -- the DB's tracked_messages table is the
+        # In-memory cache only; the DB's tracked_messages table is the
         # persistent source of truth.  No JSON file is written or read.
         self.message_channel_cache: Dict[str, int] = {}
 

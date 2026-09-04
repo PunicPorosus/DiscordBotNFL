@@ -24,7 +24,7 @@ class UserPoints(commands.Cog):
         user = ctx.author
         now = datetime.now(EASTERN)
 
-        # Off-season check — doesn't count against the 24-hour cooldown
+        # Off-season check, doesn't count against the 24-hour cooldown
         off_season = await get_db().get_bot_meta("off_season")
         if off_season == "true":
             await ctx.send(
@@ -51,7 +51,7 @@ class UserPoints(commands.Cog):
 
         scheme = await db.get_scoring_scheme(guild_id)
 
-        # Check participation before computing points — a user can have zero or
+        # Check participation before computing points; a user can have zero or
         # negative total under additive scoring and still have played all season.
         pick_count = await db.get_user_season_pick_count(
             season=season, guild_id=guild_id, user_id=str(user.id)

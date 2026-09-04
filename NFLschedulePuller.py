@@ -42,7 +42,7 @@ def fetch_full_schedule(season: int, max_weeks: int = 22):
 
     Args:
         season:    NFL season year (e.g. 2026)
-        max_weeks: Upper bound on weeks to probe (default 22 — well above 18)
+        max_weeks: Upper bound on weeks to probe (default 22, well above 18)
     """
     schedule: dict = {}
     team_cache: dict = {}
@@ -82,7 +82,7 @@ def fetch_full_schedule(season: int, max_weeks: int = 22):
             print(f"Error fetching week {week}: {e}")
             consecutive_empty_weeks += 1
             if consecutive_empty_weeks >= 3:
-                print(f"Stopping at week {week} — 3 consecutive fetch errors.")
+                print(f"Stopping at week {week}: 3 consecutive fetch errors.")
                 break
             continue
 
@@ -92,7 +92,7 @@ def fetch_full_schedule(season: int, max_weeks: int = 22):
             consecutive_empty_weeks += 1
             print(f"Week {week}: no games found")
             if consecutive_empty_weeks >= 3:
-                print(f"Stopping at week {week} — appears to be end of regular season.")
+                print(f"Stopping at week {week}: appears to be end of regular season.")
                 break
             continue
 
@@ -108,7 +108,7 @@ def fetch_full_schedule(season: int, max_weeks: int = 22):
                 home = next(get_team_abbr(c) for c in competitors if c["homeAway"] == "home")
                 away = next(get_team_abbr(c) for c in competitors if c["homeAway"] == "away")
 
-                # Preserve the full ISO datetime string — DO NOT split on 'T'.
+                # Preserve the full ISO datetime string, DO NOT split on 'T'.
                 # Downstream code relies on the time component for deadline detection,
                 # reaction locking, and "has the week ended" checks.
                 # Example: "2026-09-03T20:20Z"

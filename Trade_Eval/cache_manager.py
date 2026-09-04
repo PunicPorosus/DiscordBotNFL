@@ -3,7 +3,7 @@ Cache Manager for Trade_Eval.
 
 Handles syncing draft pick data from external sources into the local SQLite cache.
 
-Mock mode — Google Sheets (one CSV fetch per round, 7 requests total).
+Mock mode, Google Sheets (one CSV fetch per round, 7 requests total).
 
 Design decisions:
 - aiohttp for all HTTP so nothing blocks the Discord event loop
@@ -60,7 +60,7 @@ class CacheManager:
         Returns True if at least one round succeeded.
         """
         if self._syncing["mock"]:
-            logger.warning("Mock sync already in progress — skipping duplicate request")
+            logger.warning("Mock sync already in progress, skipping duplicate request")
             return False
         self._syncing["mock"] = True
         try:
@@ -112,7 +112,7 @@ class CacheManager:
             if consecutive <= 2:
                 await notify_admin(
                     self.bot,
-                    f"⚠️ **Mock draft sync failed completely** — no picks loaded.\n"
+                    f"⚠️ **Mock draft sync failed completely**: no picks loaded.\n"
                     f"Failed rounds: {failed_rounds}\nCheck logs for details.\n"
                     f"Consecutive failures: {consecutive}. Run `!trade.execute mock reset` after fixing."
                 )
@@ -129,15 +129,15 @@ class CacheManager:
             if consecutive <= 2:
                 await notify_admin(
                     self.bot,
-                    f"⚠️ **Mock draft sync partial** — {len(succeeded_rounds)}/7 rounds loaded.\n"
+                    f"⚠️ **Mock draft sync partial**: {len(succeeded_rounds)}/7 rounds loaded.\n"
                     f"Failed rounds: {failed_rounds} | Succeeded: {succeeded_rounds}\n"
                     f"Consecutive failures: {consecutive}. Run `!trade.execute mock reset` after fixing."
                 )
-            logger.warning(f"Mock sync partial — succeeded: {succeeded_rounds}, failed: {failed_rounds}")
+            logger.warning(f"Mock sync partial, succeeded: {succeeded_rounds}, failed: {failed_rounds}")
         else:
             await self.db.update_sync_status("mock", "success", url=sheet_url)
             await self.db.reset_consecutive_failures("mock")
-            logger.info(f"Mock sync complete — {len(team_picks)} teams across {len(succeeded_rounds)} rounds")
+            logger.info(f"Mock sync complete, {len(team_picks)} teams across {len(succeeded_rounds)} rounds")
 
         return True
 

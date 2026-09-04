@@ -1,5 +1,5 @@
 """
-NFL Trade Evaluator — Discord cog.
+NFL Trade Evaluator, Discord cog.
 Evaluates draft pick trades using the Jimmy Johnson and Hill chart systems.
 
 Usage: !trade 31 178 for 41 186 27R2
@@ -25,20 +25,20 @@ from BotUtils.time import now_eastern
 logger = logging.getLogger("trade_eval.cog")
 
 # Matches valid pick tokens anywhere in freeform text:
-#   +1R2  — relative future pick (year-agnostic)
-#   27R2  — absolute future pick (YYR# format)
-#   5.176 — round.overall format
-#   31    — raw overall pick number
+#   +1R2, relative future pick (year-agnostic)
+#   27R2, absolute future pick (YYR# format)
+#   5.176, round.overall format
+#   31, raw overall pick number
 # Uses (?<!\w) / (?!\w) instead of \b so the leading + in +NR tokens is captured.
 _PICK_RE = re.compile(
-    r'(?<!\w)(\+[1-3][rR][1-7]|\d{2}[rR]\d|\d\.\d{1,3}|\d{1,3})(?!\w)',
+    r'(?<!\w)(\+[1-3][rR][1-7]|\d{2}[rR]\d|\d\.\d{1,3}|[rR][1-7]|\d{1,3})(?!\w)',
     re.IGNORECASE
 )
 
-# Matches "Round(Overall)" format e.g. "1(16)" or "3(77)" — converts to dot format e.g. "1.16", "3.77"
+# Matches "Round(Overall)" format e.g. "1(16)" or "3(77)", converts to dot format e.g. "1.16", "3.77"
 _ROUND_PAREN_RE = re.compile(r'(\d+)\((\d+)\)')
 
-# Matches "YYYY Nth" future pick format e.g. "2027 3rd", "2026 1st" — converts to YYRn e.g. "27R3", "26R1"
+# Matches "YYYY Nth" future pick format e.g. "2027 3rd", "2026 1st", converts to YYRn e.g. "27R3", "26R1"
 _YEAR_ORD_RE = re.compile(r'20(\d{2})\s+(\d)(?:st|nd|rd|th)\b', re.IGNORECASE)
 
 
@@ -48,7 +48,7 @@ def _extract_pick_tokens(text: str) -> list:
     text = _ROUND_PAREN_RE.sub(lambda m: f"{m.group(1)}.{m.group(2)}", text)
     return _PICK_RE.findall(text)
 
-# Threshold (Johnson points) for a "close" trade — within this range = orange embed
+# Threshold (Johnson points) for a "close" trade, within this range = orange embed
 CLOSE_THRESHOLD_PCT = 0.05  # 5% difference on Johnson chart
 
 
@@ -153,7 +153,7 @@ class TradeEval(commands.Cog):
         self.draft_cache["nfl"] = await self.cache_mgr.load_to_memory("nfl")  # populated via !trade.picks.set
         self.draft_cache["locks"] = await self.cache_mgr.load_to_memory("locks")  # populated via auto-sync
         self.auto_sync_task.start()
-        logger.info("TradeEval cog loaded — auto sync task started")
+        logger.info("TradeEval cog loaded, auto sync task started")
 
     def cog_unload(self):
         """Teardown: cancel sync task and close DB connection."""
@@ -209,7 +209,7 @@ class TradeEval(commands.Cog):
         save to the 'locks' mode in the DB.
 
         Returns True on success, False if an exception occurred.
-        Pure local computation — reads NFL Locks week files, no HTTP requests.
+        Pure local computation, reads NFL Locks week files, no HTTP requests.
         """
         try:
             picks_by_team = locks_order.project_draft_order()
@@ -249,9 +249,12 @@ class TradeEval(commands.Cog):
         if not args:
             await ctx.send(
                 "**Usage:** `!trade <Side A picks> for <Side B picks>`\n"
-                "**Examples:** `!trade 31 178 for 41 186 +1R2`\n"
-                "**Future picks (relative):** `+1R2` = 1 yr from now R2, `+2R1`, `+3R4` (max +3)\n"
-                "**Future picks (by year):** `27R2` = 2027 Round 2"
+                "**Examples:** `!trade 31 R6 for R3 +1R2`\n"
+                "**Pick formats:**\n"
+                "• `31`: overall pick number\n"
+                "• `R3`: current year, mid-3rd-round pick\n"
+                "• `+1R2`: 1 year from now, Round 2 (max +3)\n"
+                "• `27R2`: 2027 Round 2 (must be after current year)"
             )
             return
 
@@ -270,7 +273,7 @@ class TradeEval(commands.Cog):
             )
             return
 
-        # Extract only pick-shaped tokens from each side — ignore all other words
+        # Extract only pick-shaped tokens from each side, ignore all other words
         tokens_a = _extract_pick_tokens(raw_parts[0])
         tokens_b = _extract_pick_tokens(raw_parts[1])
 
@@ -298,10 +301,10 @@ class TradeEval(commands.Cog):
             await ctx.send(
                 f"Could not parse pick(s): {bad_str}\n"
                 f"**Pick formats:**\n"
-                f"• Current year: overall pick number (e.g. `31`)\n"
-                f"• Future (relative): `+1R2` = 1 year from now, Round 2  |  `+2R1`, `+3R4` etc.\n"
-                f"• Future (by year): `{next_yy}R2` = {config.CURRENT_DRAFT_YEAR + 1} Round 2 "
-                f"— only works for years **after** {config.CURRENT_DRAFT_YEAR}"
+                f"• `31`: overall pick number\n"
+                f"• `R3`: current year, mid-3rd-round pick\n"
+                f"• `+1R2`: 1 year from now, Round 2 (max +3)\n"
+                f"• `{next_yy}R2`: {config.CURRENT_DRAFT_YEAR + 1} Round 2 (must be after {config.CURRENT_DRAFT_YEAR})"
             )
             return
 
@@ -341,7 +344,7 @@ class TradeEval(commands.Cog):
         side_a_text = _format_side(picks_a, "SIDE A")
         side_b_text = _format_side(picks_b, "SIDE B")
 
-        # Clean diffs for display — Johnson/Fitz-Spiel are integer charts but
+        # Clean diffs for display, Johnson/Fitz-Spiel are integer charts but
         # Python float arithmetic can produce values like 54.2999999955; round them.
         j_d = round(j_diff)
         h_d = round(h_diff, 2)
@@ -398,7 +401,7 @@ class TradeEval(commands.Cog):
                 return
             except discord.Forbidden:
                 logger.warning(
-                    "Missing 'Attach Files' permission in #%s — falling back to embed. "
+                    "Missing 'Attach Files' permission in #%s, falling back to embed. "
                     "Grant the bot Attach Files permission in that channel to enable image output.",
                     ctx.channel.name,
                 )
@@ -541,11 +544,11 @@ class TradeEval(commands.Cog):
         Computes the value gap between both sides using all specified picks,
         then searches for additional picks to close that gap.
 
-        Trade down — exactly one give pick; one or more anchor get picks:
+        Trade down, exactly one give pick; one or more anchor get picks:
           !find.trade.down 33 for 98       → give 33, already getting 98, find more
           !find.trade.down 33 for 98 114   → give 33, already getting 98+114, balanced?
 
-        Trade up — one or more anchor give picks; exactly one get pick:
+        Trade up, one or more anchor give picks; exactly one get pick:
           !find.trade.up 10 with 33        → want 10, giving 33, find more to offer
           !find.trade.up 10 with 33 50     → want 10, giving 33+50, balanced?
         """
@@ -569,7 +572,7 @@ class TradeEval(commands.Cog):
             if parsed is None:
                 await ctx.send(
                     f"Could not parse pick: `{token}`\n"
-                    f"Current draft year is **{config.CURRENT_DRAFT_YEAR}** — future format (e.g. `27R2`) only works for picks *after* this year. "
+                    f"Current draft year is **{config.CURRENT_DRAFT_YEAR}**: future format (e.g. `27R2`) only works for picks *after* this year. "
                     f"For current-year picks use the overall pick number (e.g. `31`), "
                     f"or for future rounds use next year and beyond (e.g. `{str(config.CURRENT_DRAFT_YEAR + 1)[2:]}R2`)."
                 )
@@ -581,7 +584,7 @@ class TradeEval(commands.Cog):
             if parsed is None:
                 await ctx.send(
                     f"Could not parse pick: `{token}`\n"
-                    f"Current draft year is **{config.CURRENT_DRAFT_YEAR}** — future format (e.g. `27R2`) only works for picks *after* this year. "
+                    f"Current draft year is **{config.CURRENT_DRAFT_YEAR}**: future format (e.g. `27R2`) only works for picks *after* this year. "
                     f"For current-year picks use the overall pick number (e.g. `31`), "
                     f"or for future rounds use next year and beyond (e.g. `{str(config.CURRENT_DRAFT_YEAR + 1)[2:]}R2`)."
                 )
@@ -589,10 +592,10 @@ class TradeEval(commands.Cog):
             get_picks.append(parsed)
 
         if direction == "down" and len(give_picks) != 1:
-            await ctx.send("Trade down: specify exactly one pick to give — e.g., `!find.trade.down 33 for 98`")
+            await ctx.send("Trade down: specify exactly one pick to give, e.g., `!find.trade.down 33 for 98`")
             return
         if direction == "up" and len(get_picks) != 1:
-            await ctx.send("Trade up: specify exactly one pick to receive — e.g., `!find.trade.up 10 with 33`")
+            await ctx.send("Trade up: specify exactly one pick to receive, e.g., `!find.trade.up 10 with 33`")
             return
 
         tolerance  = 0.02 if best_mode else 0.05
@@ -685,7 +688,7 @@ class TradeEval(commands.Cog):
                 gap = give_total - get_total if direction == "down" else get_total - give_total
                 value = (
                     f"No single solution within {int(tolerance*100)}%\n"
-                    f"Remaining gap: {gap:.1f} pts — try position syntax or adjust picks"
+                    f"Remaining gap: {gap:.1f} pts, try position syntax or adjust picks"
                 )
 
             embed.add_field(name=f"Chart: {chart_name}", value=value, inline=False)
@@ -944,7 +947,7 @@ class TradeEval(commands.Cog):
             ok = await self.cache_mgr.sync_mock_from_sheet(config.PICK_SHEET_URL, DEFAULT_ROUND_GIDS)
             if ok:
                 self.draft_cache["mock"] = await self.cache_mgr.load_to_memory("mock")
-                await ctx.send(f"Mock sync complete — {len(self.draft_cache['mock'])} teams loaded.")
+                await ctx.send(f"Mock sync complete, {len(self.draft_cache['mock'])} teams loaded.")
             else:
                 await ctx.send("Mock sync failed. Check logs.")
 
@@ -965,12 +968,12 @@ class TradeEval(commands.Cog):
                         preview.append(f"... +{len(playoff_lines)-4} more playoff teams")
                 summary = "\n".join(preview)
                 await ctx.send(
-                    f"Locks sync complete — {team_count} teams projected.\n"
+                    f"Locks sync complete, {team_count} teams projected.\n"
                     f"`[NP]` = non-playoff  `[PL]` = playoff (estimated by seeding)\n"
                     f"```\n{summary}\n```"
                 )
             else:
-                await ctx.send("Locks sync failed. Check logs — NFL Locks week files may not be populated yet.")
+                await ctx.send("Locks sync failed. Check logs, NFL Locks week files may not be populated yet.")
 
     @commands.command(name="trade.cache.status")
     @commands.is_owner()
@@ -1090,7 +1093,7 @@ class TradeEval(commands.Cog):
         if not team_parts or not pick_parts:
             await ctx.send(
                 "Could not separate team name from pick numbers.\n"
-                "Tip: quote multi-word team names — `\"Kansas City Chiefs\" 29 61 ...`"
+                "Tip: quote multi-word team names, `\"Kansas City Chiefs\" 29 61 ...`"
             )
             return
 
@@ -1106,7 +1109,7 @@ class TradeEval(commands.Cog):
                 bad.append(p)
 
         if bad:
-            await ctx.send(f"Invalid pick number(s): {', '.join(bad)} — must be 1–257.")
+            await ctx.send(f"Invalid pick number(s): {', '.join(bad)}: must be 1–257.")
             return
 
         if not picks:

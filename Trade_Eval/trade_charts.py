@@ -6,7 +6,7 @@ Contains the four major trade value charts used by NFL teams.
 # Round start positions (overall pick number for pick 1 of each round)
 ROUND_STARTS = {1: 1, 2: 33, 3: 65, 4: 97, 5: 129, 6: 161, 7: 193}
 
-# Jimmy Johnson chart — picks 1–256 (complete original published values)
+# Jimmy Johnson chart, picks 1–256 (complete original published values)
 JOHNSON = {
     # Round 1 (picks 1–32)
      1: 3000,  2: 2600,  3: 2200,  4: 1800,  5: 1700,
@@ -74,7 +74,7 @@ JOHNSON = {
     255: 0.45, 256:  0.4,
 }
 
-# Fitzgerald-Spielberger chart (Over The Cap) — picks 1–256
+# Fitzgerald-Spielberger chart (Over The Cap): picks 1–256
 FITZ_SPIEL = {
     # Round 1 (picks 1–32)
      1: 3000,  2: 2649,  3: 2443,  4: 2297,  5: 2184,
@@ -142,7 +142,7 @@ FITZ_SPIEL = {
     255: 192, 256: 190,
 }
 
-# Stuart (Football Perspective) chart — Chase Stuart, 2012 — picks 1–224; 225–256 set to 0.0
+# Stuart (Football Perspective) chart, Chase Stuart, 2012, picks 1–224; 225–256 set to 0.0
 STUART = {
     # Round 1 (picks 1–32)
      1: 34.6,  2: 30.2,  3: 27.6,  4: 25.8,  5: 24.3,
@@ -200,11 +200,11 @@ STUART = {
     213: 0.5, 214: 0.4, 215: 0.4, 216: 0.4, 217: 0.3,
     218: 0.3, 219: 0.3, 220: 0.3, 221: 0.2, 222: 0.2,
     223: 0.2, 224: 0.1,
-    # Compensatory / extra picks (225–256) — beyond original chart, set to 0.0
+    # Compensatory / extra picks (225–256): beyond original chart, set to 0.0
     **{p: 0.0 for p in range(225, 257)},
 }
 
-# Hill (Rich Hill / Pats Pulpit) chart — picks 1–257 (DraftTek published values)
+# Hill (Rich Hill / Pats Pulpit) chart, picks 1–257 (DraftTek published values)
 HILL = {
     # Round 1 (picks 1–32)
        1: 1000,   2:  717,   3:  514,   4:  491,   5:  468,

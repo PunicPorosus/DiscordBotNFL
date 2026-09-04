@@ -9,7 +9,7 @@ Tiebreaker order (applied within any tied group):
   1. Overall win%
   2. Head-to-head record within the tied group
   3. Division record
-  4. Strength of schedule (SOS) — approximation for remaining NFL tiebreakers
+  4. Strength of schedule (SOS): approximation for remaining NFL tiebreakers
      that require data not tracked by NFL Locks (head-to-head conference record,
      common games, strength of victory, etc.)
   5. Alphabetical on full team name (determinism)
@@ -66,7 +66,7 @@ ABBREV_TO_FULL: dict[str, str] = {
 
 ALL_ABBREVS: frozenset[str] = frozenset(ABBREV_TO_FULL.keys())
 
-# NFL divisions — 4 per conference, 4 teams each
+# NFL divisions, 4 per conference, 4 teams each
 DIVISIONS: dict[str, list[str]] = {
     "AFC East":  ["BUF", "MIA", "NE",  "NYJ"],
     "AFC North": ["BAL", "CIN", "CLE", "PIT"],
@@ -123,11 +123,11 @@ def _compute_all_stats() -> tuple[dict, dict, dict, dict]:
     """
     Read all scored NFL Locks week files in a single pass and compute:
 
-    overall_records  — {abbr: {wins, losses, ties, games}}
-    h2h              — {(min_abbr, max_abbr): {wins_a, wins_b, ties}}
+    overall_records, {abbr: {wins, losses, ties, games}}
+    h2h, {(min_abbr, max_abbr): {wins_a, wins_b, ties}}
                          where wins_a = wins by the alphabetically-first team
-    div_records      — {abbr: {wins, losses, ties, games}} (same-division games only)
-    opponents        — {abbr: [opp_abbr, ...]} for all completed games (SOS input)
+    div_records, {abbr: {wins, losses, ties, games}} (same-division games only)
+    opponents, {abbr: [opp_abbr, ...]} for all completed games (SOS input)
 
     Returns (overall_records, h2h, div_records, opponents).
     All 32 teams are always present in every dict; zeros for teams with no games.
@@ -256,7 +256,7 @@ def _h2h_win_pct(team: str, group: list[str], h2h: dict) -> float:
 def _group_by_value(items: list, key_fn) -> list[list]:
     """
     Sort items descending by key_fn and group those with equal values.
-    Returns a list of groups, each group a list of items — highest value first.
+    Returns a list of groups, each group a list of items, highest value first.
     Uses epsilon comparison to avoid floating-point equality issues.
     """
     keyed = sorted(((key_fn(item), item) for item in items), key=lambda x: -x[0])
@@ -284,7 +284,7 @@ def _rank_teams(
       4. SOS (proxy for remaining NFL tiebreakers)
       5. Alphabetical (determinism)
 
-    The h2h tiebreaker is applied strictly within each tied subset — teams at
+    The h2h tiebreaker is applied strictly within each tied subset, teams at
     different win% levels never influence each other's h2h calculation.
 
     Returns a list ordered best → worst (highest win% first).
@@ -358,7 +358,7 @@ def identify_playoff_teams(
 
         playoff.update(div_winners)
 
-        # Wild cards — best remaining teams in conference
+        # Wild cards, best remaining teams in conference
         conf_teams = [t for div in conf_divisions for t in DIVISIONS[div]]
         wc_candidates = [t for t in conf_teams if t not in div_winners]
         ranked_wc = _rank_teams(wc_candidates, overall, h2h, div_recs, sos)

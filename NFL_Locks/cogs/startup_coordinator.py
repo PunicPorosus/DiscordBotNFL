@@ -32,10 +32,10 @@ class StartupCoordinator(commands.Cog):
     @commands.Cog.listener()
     async def on_resumed(self):
         """
-        Discord successfully resumed the previous session — missed Gateway
+        Discord successfully resumed the previous session, missed Gateway
         events were replayed automatically.  No catchup needed.
         """
-        logger.info("Discord session resumed — Gateway replayed missed events, no catchup needed")
+        logger.info("Discord session resumed, Gateway replayed missed events, no catchup needed")
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -66,7 +66,7 @@ class StartupCoordinator(commands.Cog):
     # -- Cold start --------------------------------------------------------
 
     async def _run_cold_start(self):
-        """Full initialization sequence — runs once on first bot start."""
+        """Full initialization sequence, runs once on first bot start."""
         self.startup_complete = True
 
         # Wait for bot to fully initialize
@@ -157,11 +157,11 @@ class StartupCoordinator(commands.Cog):
                         await catchup_cog.process_week_reactions(_startup_week)
                         logger.info(f"Startup reaction catchup complete for Week {_startup_week}")
                     else:
-                        logger.info(f"Week {_startup_week} deadline already passed — skipping catchup")
+                        logger.info(f"Week {_startup_week} deadline already passed, skipping catchup")
                 else:
-                    logger.info("Not in an active NFL week — skipping startup reaction catchup")
+                    logger.info("Not in an active NFL week, skipping startup reaction catchup")
             else:
-                logger.warning("ReactionCatchup cog not found — skipping startup reaction catchup")
+                logger.warning("ReactionCatchup cog not found, skipping startup reaction catchup")
 
             # Step 6: Post Lock Summaries if Missed
             logger.info("Step 7/7: Checking for missed lock summaries...")
@@ -211,11 +211,11 @@ class StartupCoordinator(commands.Cog):
         )
 
         if gap_seconds < _RECONNECT_CATCHUP_THRESHOLD_S:
-            logger.info("Gap below threshold — skipping reaction catchup")
+            logger.info("Gap below threshold, skipping reaction catchup")
             return
 
         logger.info(
-            f"Gap {gap_seconds:.0f}s exceeds threshold — running reaction "
+            f"Gap {gap_seconds:.0f}s exceeds threshold, running reaction "
             f"catchup for current week"
         )
         catchup_cog = self.bot.get_cog('ReactionCatchup')
@@ -225,7 +225,7 @@ class StartupCoordinator(commands.Cog):
             _now_et = datetime.now(EASTERN)
             _week = find_current_week(_schedule, _now_et, get_max_week())
             if _week is None:
-                logger.info("Not in an active NFL week — skipping reconnect reaction catchup")
+                logger.info("Not in an active NFL week, skipping reconnect reaction catchup")
             else:
                 try:
                     await catchup_cog.process_week_reactions(_week)
@@ -233,7 +233,7 @@ class StartupCoordinator(commands.Cog):
                 except Exception as e:
                     logger.error(f"Reconnect reaction catchup failed: {e}", exc_info=True)
         else:
-            logger.warning("ReactionCatchup cog not found — cannot run reconnect catchup")
+            logger.warning("ReactionCatchup cog not found, cannot run reconnect catchup")
     
     async def catchup_locks(self, locks_cog):
         """Post lock summaries for any weeks that passed deadline but didn't post summary."""
@@ -242,7 +242,6 @@ class StartupCoordinator(commands.Cog):
         now = datetime.now(EASTERN)
         from NFL_Locks.utils.data_utils import load_full_schedule
         from NFL_Locks.utils.time_utils import get_week_deadline
-        from datetime import timedelta
         
         from NFL_Locks.utils.schedule_utils import get_max_week
         schedule = load_full_schedule()
@@ -259,12 +258,13 @@ class StartupCoordinator(commands.Cog):
                 if not deadline:
                     continue
 
-                # Check if deadline has passed but week hasn't ended yet
-                first_game_utc = datetime.fromisoformat(week_games[0]["date"].replace('Z', '+00:00'))
-                first_game = first_game_utc.astimezone(EASTERN)
-                days_since_tuesday = (first_game.weekday() - 1) % 7
-                week_start = first_game - timedelta(days=days_since_tuesday)
-                week_end = week_start + timedelta(days=6, hours=23, minutes=59)
+                # Deadline is behind us, but is the week still running?
+                # Shared window function so this agrees with find_current_week
+                # rather than keeping a seventh private copy of the boundary math.
+                from NFL_Locks.utils.schedule_utils import get_week_window
+                _week_start, week_end = get_week_window(week_games)
+                if week_end is None:
+                    continue
                 
                 # Only post if:
                 # 1. Deadline has passed
@@ -299,7 +299,7 @@ class StartupCoordinator(commands.Cog):
         current_week, previous_week, in_nfl_season = winners_cog._get_current_week_info(now)
 
         if not in_nfl_season:
-            logger.info("Off-season — skipping Tuesday catchup (results/leaderboard/games)")
+            logger.info("Off-season, skipping Tuesday catchup (results/leaderboard/games)")
             return
 
         if not previous_week:
@@ -322,7 +322,7 @@ class StartupCoordinator(commands.Cog):
             await results_cog.catchup_results()
             await asyncio.sleep(2)
         else:
-            logger.info(f"Skipping results — already posted for Week {previous_week}")
+            logger.info(f"Skipping results, already posted for Week {previous_week}")
 
         # Post games for current week if needed
         if current_week:
@@ -359,7 +359,7 @@ class StartupCoordinator(commands.Cog):
         if self.startup_complete:
             await ctx.send("✅ Startup sequence completed")
         else:
-            await ctx.send("❌ Startup sequence failed — check logs")
+            await ctx.send("❌ Startup sequence failed, check logs")
 
     @commands.command(name=CMD_FORCE_RECONNECT_CATCHUP)
     @commands.is_owner()
@@ -376,7 +376,7 @@ class StartupCoordinator(commands.Cog):
         _now_et = datetime.now(EASTERN)
         _week = find_current_week(_schedule, _now_et, get_max_week())
         if _week is None:
-            await ctx.send("❌ Not in an active NFL week — no catchup to run.")
+            await ctx.send("❌ Not in an active NFL week, no catchup to run.")
             return
         try:
             await catchup_cog.process_week_reactions(_week)

@@ -35,10 +35,10 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise ValueError(f"DISCORD_TOKEN not set in {_ENV_FILE}")
 
-# Logger for bot.py startup messages — maps to STARTUP designator in log output
+# Logger for bot.py startup messages, maps to STARTUP designator in log output
 logger = logging.getLogger("startup")
 
-logger.info(f"Starting in {_ENV_LABEL} mode — env file: {_ENV_FILE.name}")
+logger.info(f"Starting in {_ENV_LABEL} mode, env file: {_ENV_FILE.name}")
 
 # Override print() so any stray print() calls in bot.py also land in the log
 _original_print = print
@@ -71,7 +71,6 @@ initial_extensions = [
     "NFL_Locks.cogs.games_manager",      # Game posting
     "NFL_Locks.cogs.results_manager",    # Results posting
     "NFL_Locks.cogs.reactions",          # Updated to use Cache cog
-    "NFL_Locks.cogs.games",
     "NFL_Locks.cogs.results",
     "NFL_Locks.cogs.auto_tasks",
     "NFL_Locks.cogs.locks",
@@ -98,7 +97,7 @@ async def on_ready():
     bot._start_time = time.monotonic()
     logger.info(f"Logged in as {bot.user}")
     logger.info(f"Loaded extensions: {', '.join(bot.extensions.keys())}")
-    await notify_admin(bot, f"✅ **Bot Started** — {bot.user.name} is online.")
+    await notify_admin(bot, f"✅ **Bot Started**: {bot.user.name} is online.")
 
     # Report any extensions that failed to load during startup
     if bot._failed_extensions:
@@ -126,7 +125,7 @@ async def on_command_error(ctx, error):
     if isinstance(original, commands.CommandNotFound):
         return
 
-    # -- User-facing errors — reply in channel, no admin alert -------------
+    # -- User-facing errors, reply in channel, no admin alert -------------
     if isinstance(original, commands.MissingRequiredArgument):
         await ctx.send(
             f"❌ Missing argument: `{original.param.name}`\n"
@@ -143,19 +142,19 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ You don't have permission to use that command.")
         return
 
-    # -- Unexpected errors — log fully and notify admin ---------------------
+    # -- Unexpected errors, log fully and notify admin ---------------------
     tb = "".join(traceback.format_exception(type(original), original, original.__traceback__))
     logger.error(
         f"Unhandled error in command '{ctx.command}' "
         f"(invoked by {ctx.author} in {ctx.guild}/{ctx.channel}):\n{tb}"
     )
 
-    # Keep the Discord notification concise — full details are in the log file
+    # Keep the Discord notification concise; full details are in the log file
     short = str(original)[:200]
     guild_name = ctx.guild.name if ctx.guild else "DM"
     await notify_admin(
         bot,
-        f"❌ **Command error** — `!{ctx.invoked_with}` in **{guild_name}**\n"
+        f"❌ **Command error**: `!{ctx.invoked_with}` in **{guild_name}**\n"
         f"`{type(original).__name__}: {short}`"
     )
 
@@ -216,7 +215,7 @@ async def main():
                 logger.info(f"✅ Loaded {ext}")
             except Exception as e:
                 logger.error(f"❌ Failed to load {ext}: {e}", exc_info=True)
-                bot._failed_extensions.append(f"{ext} — {e}")
+                bot._failed_extensions.append(f"{ext}: {e}")
 
         if bot._failed_extensions:
             logger.warning(

@@ -36,7 +36,7 @@ def _season() -> int:
 async def mark_winners_fetched(week_number: int):
     """Mark that winning teams have been fetched for a week."""
     await get_db().mark_winners_fetched(_season(), week_number)
-    logger.info(f"[STATUS] Winners fetched — Week {week_number}")
+    logger.info(f"[STATUS] Winners fetched, Week {week_number}")
 
 
 async def needs_winners(week_number: int) -> bool:
@@ -51,7 +51,7 @@ async def needs_winners(week_number: int) -> bool:
 async def mark_games_posted(week_number: int, guild_id: int):
     """Mark that the games list has been posted for a week in a guild."""
     await get_db().mark_games_posted(_season(), week_number, guild_id)
-    logger.info(f"[STATUS] Games posted — Week {week_number}, Guild {guild_id}")
+    logger.info(f"[STATUS] Games posted, Week {week_number}, Guild {guild_id}")
 
 
 async def needs_games_posted(week_number: int, guild_id: int) -> bool:
@@ -86,10 +86,10 @@ async def mark_results_posted(week_number: int, guild_id: int = None):
         guilds = await db.get_all_configured_guilds()
         for gid in guilds:
             await db.mark_results_posted(season, week_number, gid)
-        logger.info(f"[STATUS] Results posted — Week {week_number} (all guilds)")
+        logger.info(f"[STATUS] Results posted, Week {week_number} (all guilds)")
     else:
         await db.mark_results_posted(season, week_number, guild_id)
-        logger.info(f"[STATUS] Results posted — Week {week_number}, Guild {guild_id}")
+        logger.info(f"[STATUS] Results posted, Week {week_number}, Guild {guild_id}")
 
 
 async def needs_results_posted(week_number: int, guild_id: int = None) -> bool:
@@ -128,7 +128,7 @@ async def get_guilds_needing_locks(week_number: int) -> List[int]:
     """Return guild IDs that need lock summaries posted this week."""
     db = get_db()
     season = _season()
-    # Only relevant after deadline — needs_locks_posted handles that guard
+    # Only relevant after deadline, needs_locks_posted handles that guard
     guilds = await db.get_all_configured_guilds()
     result = []
     for guild_id in guilds:
@@ -144,7 +144,7 @@ async def get_guilds_needing_locks(week_number: int) -> List[int]:
 async def mark_deadline_passed(week_number: int):
     """Mark that the submission deadline has passed for a week."""
     await get_db().mark_deadline_passed(_season(), week_number)
-    logger.info(f"[STATUS] Deadline passed — Week {week_number}")
+    logger.info(f"[STATUS] Deadline passed, Week {week_number}")
 
 
 async def has_deadline_passed(week_number: int) -> bool:
@@ -155,7 +155,7 @@ async def has_deadline_passed(week_number: int) -> bool:
 async def mark_reactions_finalized(week_number: int):
     """Mark that reactions have been finalised for a week."""
     await get_db().mark_reactions_finalized(_season(), week_number)
-    logger.info(f"[STATUS] Reactions finalised — Week {week_number}")
+    logger.info(f"[STATUS] Reactions finalised, Week {week_number}")
 
 
 async def are_reactions_finalized(week_number: int) -> bool:
@@ -247,6 +247,6 @@ async def rebuild_status_from_weeks():
     status_migration.py is being updated.
     """
     logger.warning(
-        "rebuild_status_from_weeks() called but is a no-op — "
+        "rebuild_status_from_weeks() called but is a no-op, "
         "status lives in SQLite and does not need rebuilding."
     )

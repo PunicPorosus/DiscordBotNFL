@@ -156,7 +156,7 @@ class Admin(commands.Cog):
             return
 
         picks_str = ", ".join(f"`{t}`" for t in sorted(user_picks))
-        await ctx.send(f"**{username}** — Week {week_num} picks: {picks_str}")
+        await ctx.send(f"**{username}**: Week {week_num} picks: {picks_str}")
 
 
     # -- Scoring scheme -----------------------------------------------------
@@ -168,8 +168,8 @@ class Admin(commands.Cog):
         Set the scoring scheme for this server.
 
         Available schemes:
-          all_or_nothing  — correct picks only count if you had zero wrong picks
-          additive        — +1 per correct pick, -1 per wrong pick (can go negative)
+          all_or_nothing, correct picks only count if you had zero wrong picks
+          additive, +1 per correct pick, -1 per wrong pick (can go negative)
 
         Usage: !set_scoring_scheme additive
         """
@@ -264,7 +264,7 @@ class Admin(commands.Cog):
         cache_cog = self.bot.get_cog("Cache")
         if cache_cog:
             cache_size = len(getattr(cache_cog, "message_to_week_cache", {}))
-            lines.append(f"**Cache cog** — message→week entries: {cache_size}")
+            lines.append(f"**Cache cog**: message→week entries: {cache_size}")
         else:
             lines.append("**Cache cog:** not loaded")
 
@@ -275,7 +275,7 @@ class Admin(commands.Cog):
             dm_cd   = len(getattr(reactions_cog, "dm_cooldowns", {}))
             in_prog = len(getattr(reactions_cog, "processing_reactions", set()))
             lines.append(
-                f"**Reactions cog** — msg cooldowns: {msg_cd} | "
+                f"**Reactions cog**: msg cooldowns: {msg_cd} | "
                 f"DM cooldowns: {dm_cd} | in-flight: {in_prog}"
             )
         else:
@@ -285,7 +285,7 @@ class Admin(commands.Cog):
         try:
             from NFL_Locks.utils.rate_limiter import rate_limiter
             channel_count = len(rate_limiter._last_send)
-            lines.append(f"**Rate limiter** — tracked channels: {channel_count}")
+            lines.append(f"**Rate limiter**: tracked channels: {channel_count}")
         except Exception:
             lines.append("**Rate limiter:** unavailable")
 
@@ -295,7 +295,7 @@ class Admin(commands.Cog):
             loop_running = auto_cog.dynamic_weekly_tasks.is_running()
             last_week    = auto_cog.last_posted_week or "none this session"
             lines.append(
-                f"**AutoTasks** — loop running: {loop_running} | "
+                f"**AutoTasks**: loop running: {loop_running} | "
                 f"last posted week: {last_week}"
             )
         else:

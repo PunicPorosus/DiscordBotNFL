@@ -1,6 +1,6 @@
 # Games Manager - Handles posting weekly matchups to channels
 
-from discord.ext import commands
+from discord.ext import commands, tasks
 import discord
 import logging
 import asyncio
@@ -23,6 +23,36 @@ class GamesManager(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self.catchup_games_loop.start()
+
+    def cog_unload(self):
+        self.catchup_games_loop.cancel()
+
+    # -- Hourly matchup safety net ---------------------------------------------
+
+    @tasks.loop(hours=1)
+    async def catchup_games_loop(self):
+        """Hourly check that the current week's matchups have actually posted.
+
+        catchup_games previously ran only from startup_coordinator's cold start,
+        never on a timer. auto_tasks posts week N+1 as a tail of week N's results
+        and there is no week 0, so Week 1 had no automatic posting path at all,
+        and any week whose results post was blocked took the next week's matchups
+        down with it.
+
+        catchup_games is idempotent: it returns early outside an active week,
+        after the deadline has passed, and for guilds that already have tracked
+        messages for the week, so calling it on a timer cannot double-post.
+        """
+        try:
+            await self.catchup_games()
+        except Exception as e:
+            logger.error(f"Hourly game catchup failed: {e}", exc_info=True)
+
+    @catchup_games_loop.before_loop
+    async def _before_catchup_games_loop(self):
+        """Guilds and channels are not resolvable until the bot is ready."""
+        await self.bot.wait_until_ready()
 
     def _get_current_week_info(self, now):
         """Determine current NFL week. Delegates to schedule_utils shared function."""
@@ -43,7 +73,7 @@ class GamesManager(commands.Cog):
             return
 
         if is_deadline_passed(current_week):
-            logger.info(f"Week {current_week} deadline has passed — skipping game post")
+            logger.info(f"Week {current_week} deadline has passed, skipping game post")
             return
 
         season = get_current_season()

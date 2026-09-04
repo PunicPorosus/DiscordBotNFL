@@ -13,6 +13,9 @@ _FUTURE_RE = re.compile(r'^(\d{2})R(\d)$', re.IGNORECASE)
 # Regex for relative future pick format: +NR# (e.g. "+1R2", "+3R1")
 _REL_FUTURE_RE = re.compile(r'^\+([1-3])R([1-7])$', re.IGNORECASE)
 
+# Regex for round-only shorthand: R# (e.g. "R3", "R6"): current year, mid-round
+_ROUND_ONLY_RE = re.compile(r'^R([1-7])$', re.IGNORECASE)
+
 # Regex for round.pick format (e.g. "5.176", "6.190")
 _ROUND_PICK_RE = re.compile(r'^(\d)\.(\d{1,3})$')
 
@@ -31,15 +34,24 @@ def parse_pick(token: str):
 
     Supported formats:
       "31"     → overall pick 31, current year (years_out = 0)
+      "R3"     → current year, mid-3rd-round pick
       "5.176"  → round 5, overall pick 176, current year
-      "6.190"  → round 6, overall pick 190, current year
-      "27R2"   → 2027 Round 2 mid pick (pick 48), years_out calculated from CURRENT_DRAFT_YEAR
-      "+1R2"   → 1 year from now, Round 2 mid pick — year-agnostic relative format
+      "27R2"   → 2027 Round 2 mid pick, years_out calculated from CURRENT_DRAFT_YEAR
+      "+1R2"   → 1 year from now, Round 2 mid pick, year-agnostic relative format
       "+3R1"   → 3 years from now, Round 1 mid pick (max years_out = 3)
 
     Returns (overall_pick, years_out, display_label) or None if cannot be parsed.
     """
     token = token.strip()
+
+    # Round-only shorthand: R# (e.g. "R3", "R6"): current year, mid-round pick
+    m = _ROUND_ONLY_RE.match(token)
+    if m:
+        round_num = int(m.group(1))
+        overall = _round_mid_pick(round_num)
+        if overall is None:
+            return None
+        return (overall, 0, f"Round {round_num}")
 
     # Relative future pick: +NR# format (e.g. "+1R2", "+3R1")
     m = _REL_FUTURE_RE.match(token)

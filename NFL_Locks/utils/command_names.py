@@ -2,7 +2,7 @@
 Central command name registry.
 
 All Discord command names are defined here as string constants.
-To rename a command, change it in this file only — no need to touch the cog.
+To rename a command, change it in this file only, no need to touch the cog.
 
 Import pattern in cogs:
     from NFL_Locks.utils.command_names import CMD_FIX_PICK, CMD_SHOW_PICKS
@@ -12,7 +12,7 @@ Usage in decorator:
     async def fix_pick(self, ctx, ...):
         ...
 
-Note: the function name (e.g. fix_pick) no longer matters for what users type —
+Note: the function name (e.g. fix_pick) no longer matters for what users type, 
 only the name= value does. Keep function names matching constants for readability.
 """
 
@@ -31,9 +31,6 @@ CMD_REBUILD_CACHE           = "rebuild_cache"
 CMD_CACHE_STATS             = "cache_stats"
 
 # -- games.py ------------------------------------------------------------------
-CMD_GAMES                   = "games"
-CMD_FETCH_WINNERS_LEGACY    = "fetch_winners_legacy"
-CMD_TEST_API                = "test_api"
 
 # -- games_manager.py ----------------------------------------------------------
 CMD_POST_GAMES              = "post_games"

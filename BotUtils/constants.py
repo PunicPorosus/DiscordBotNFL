@@ -1,9 +1,9 @@
 """
 Bot-wide constants shared across all cogs and modules.
-Single source of truth — nothing else should define these.
+Single source of truth; nothing else should define these.
 """
 
-# Bot owner — used for admin DMs and permission checks
+# Bot owner, used for admin DMs and permission checks
 OWNER_ID = 408027577521930251
 
 # Discord server and channel for bot operational notifications

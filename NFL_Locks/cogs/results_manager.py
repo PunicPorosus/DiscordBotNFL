@@ -2,10 +2,10 @@
 
 from discord.ext import commands
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from NFL_Locks.utils.constants import EASTERN
 from NFL_Locks.utils.data_utils import load_full_schedule
-from NFL_Locks.utils.schedule_utils import get_week_range_text, get_max_week, get_current_season
+from NFL_Locks.utils.schedule_utils import get_week_range_text, get_max_week, get_current_season, get_week_window
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.command_names import CMD_POST_RESULTS_MANUAL, CMD_SHOW_RESULTS
 from NFL_Locks.utils.command_utils import off_season_reply
@@ -21,7 +21,7 @@ class ResultsManager(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # _compute_scores removed — all scoring logic lives in utils/scoring.py
+    # _compute_scores removed, all scoring logic lives in utils/scoring.py
 
     # -- Core posting logic ----------------------------------------------------
 
@@ -35,7 +35,7 @@ class ResultsManager(commands.Cog):
         """Post results for any recent weeks that have winners but haven't been posted.
 
         Weeks whose week_end is more than _CATCHUP_WINDOW_DAYS in the past are
-        silently skipped — a stale un-posted row there indicates a fresh DB,
+        silently skipped, a stale un-posted row there indicates a fresh DB,
         not a missed post.
         """
         logger.info("Checking for results to post...")
@@ -64,13 +64,9 @@ class ResultsManager(commands.Cog):
             if not week_games:
                 continue
 
-            first_game_utc = datetime.fromisoformat(
-                week_games[0]["date"].replace('Z', '+00:00')
-            )
-            first_game = first_game_utc.astimezone(EASTERN)
-            days_since_tuesday = (first_game.weekday() - 1) % 7
-            week_start = first_game - timedelta(days=days_since_tuesday)
-            week_end = week_start + timedelta(days=6, hours=23, minutes=59)
+            _week_start, week_end = get_week_window(week_games)
+            if week_end is None:
+                continue
 
             if now <= week_end:
                 # Week hasn't finished yet
@@ -79,7 +75,7 @@ class ResultsManager(commands.Cog):
             days_since_end = (now - week_end).days
             if days_since_end > self._CATCHUP_WINDOW_DAYS:
                 logger.debug(
-                    f"Week {wk} ended {days_since_end}d ago — outside catchup "
+                    f"Week {wk} ended {days_since_end}d ago, outside catchup "
                     f"window ({self._CATCHUP_WINDOW_DAYS}d), skipping"
                 )
                 continue

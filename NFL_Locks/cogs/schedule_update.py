@@ -4,7 +4,7 @@ Schedule Updater
 Automatically re-fetches the NFL schedule once per year on August 15th.
 
 Design decisions:
-- Uses tasks.loop(time=...) so discord.py handles daily alignment natively —
+- Uses tasks.loop(time=...) so discord.py handles daily alignment natively, 
   no manual sleep-until-9-AM math needed, no drift.
 - Passes the current calendar year to NFLschedulePuller.py as a CLI argument
   so the script never fetches the wrong season.
@@ -73,7 +73,7 @@ class ScheduleUpdater(commands.Cog):
             await self._maybe_archive(now)
 
         # -- Aug 15+: pull the new season's schedule ------------------------
-        # In-memory short-circuit (cleared on restart, but that's fine —
+        # In-memory short-circuit (cleared on restart, but that's fine, 
         # the metadata check below is the durable guard)
         if self.schedule_updated_this_year:
             return
@@ -98,7 +98,7 @@ class ScheduleUpdater(commands.Cog):
     def _already_updated_this_season(self, year: int) -> bool:
         """
         Return True if the schedule metadata shows it was updated for `year`.
-        Reads the on-disk schedule file — no imports from schedule_utils to
+        Reads the on-disk schedule file, no imports from schedule_utils to
         avoid circular-dependency issues at cog load time.
         """
         from NFL_Locks.utils.data_utils import get_schedule_metadata
@@ -121,15 +121,25 @@ class ScheduleUpdater(commands.Cog):
         """
         Archive last season's DB data if it hasn't been done yet.
 
-        Uses bot_meta as the durable idempotency guard so a bot restart on
-        Aug 1 doesn't double-archive.  get_current_season() still returns the
-        old season year on Aug 1 (the schedule file hasn't been updated yet),
-        so that's the correct season to archive.
+        The season to archive comes from the calendar year, NOT from
+        get_current_season(). get_current_season() reads the schedule file, whose
+        meaning flips halfway through this very month: before the Aug 15 pull it
+        returns last season, after it returns the new one.
+
+        That flip used to be a season-ending bug. season_archived_this_year is an
+        in-memory flag, so a restart between Aug 15 and 31 cleared it. This method
+        then ran again, read the NEW season year out of the freshly pulled
+        schedule, looked for a "season_<new year>_db_archived" marker that could
+        not exist, and archived and purged the brand new season. off_season was
+        left "true", and the pull could not clear it because
+        _already_updated_this_season() short-circuits by then, so the bot sat out
+        the entire year with every scoring command blocked.
+
+        bot_meta remains the durable idempotency guard against double-archiving.
         """
         from NFL_Locks.utils.database import get_db
-        from NFL_Locks.utils.schedule_utils import get_current_season
 
-        season_to_archive = get_current_season()
+        season_to_archive = now.year - 1
         meta_key = f"season_{season_to_archive}_db_archived"
 
         db = get_db()
@@ -146,6 +156,19 @@ class ScheduleUpdater(commands.Cog):
         from NFL_Locks.utils.database import get_db
         from NFL_Locks.utils.data_utils import DATA_DIR
         from datetime import timezone
+
+        # Belt and braces against any caller passing a current or future season.
+        # Purging here is destructive and irreversible for the live DB, so refuse
+        # rather than trust the argument.
+        now_year = datetime.now(EASTERN).year
+        if season_year >= now_year:
+            msg = (
+                f"Refusing to archive season {season_year}: it is not in the past "
+                f"(current calendar year is {now_year}). Nothing was purged."
+            )
+            print(f"[ARCHIVE] {msg}")
+            await self._notify_owner(f"**Archive refused**\n{msg}")
+            return
 
         archive_dir = DATA_DIR / "archives" / f"season_{season_year}"
         db = get_db()
@@ -167,7 +190,7 @@ class ScheduleUpdater(commands.Cog):
                 f"Bot is in off-season mode. The {season_year + 1} schedule "
                 f"pulls on {SCHEDULE_UPDATE_MONTH}/{SCHEDULE_UPDATE_DAY}."
             )
-            print(f"[ARCHIVE] Season {season_year} archived — {total_rows} rows")
+            print(f"[ARCHIVE] Season {season_year} archived, {total_rows} rows")
             await self._notify_owner(msg)
 
         except Exception as e:
@@ -228,7 +251,7 @@ class ScheduleUpdater(commands.Cog):
 
             total_weeks = metadata.get("total_weeks", "?") if metadata else "?"
             await self._notify_owner(
-                f"**NFL Schedule Updated — {season_year} season**\n"
+                f"**NFL Schedule Updated, {season_year} season**\n"
                 f"Total weeks: {total_weeks}\n"
                 f"Updated: {datetime.now(EASTERN).strftime('%B %d, %Y at %I:%M %p ET')}\n"
                 f"Off-season mode cleared. Bot is ready for {season_year}."
@@ -256,7 +279,7 @@ class ScheduleUpdater(commands.Cog):
         season_year = datetime.now(EASTERN).year
         await ctx.send(f"Running schedule update for {season_year}...")
         await self._run_update(season_year)
-        await ctx.send("✅ Schedule update complete — check your DMs for details.")
+        await ctx.send("✅ Schedule update complete, check your DMs for details.")
 
     @commands.command(name=CMD_CHECK_SCHEDULE_STATUS)
     @commands.is_owner()
@@ -275,7 +298,7 @@ class ScheduleUpdater(commands.Cog):
                 f"Last updated: {metadata.get('last_updated', 'unknown')}"
             )
         else:
-            on_disk = "❌ No metadata found — schedule may be missing or in old format"
+            on_disk = "❌ No metadata found, schedule may be missing or in old format"
 
         await ctx.send(
             f"**Schedule Status**\n"

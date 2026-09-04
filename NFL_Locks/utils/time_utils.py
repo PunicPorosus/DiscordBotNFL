@@ -6,7 +6,7 @@ Note: EASTERN is imported from BotUtils.time (the bot-wide source of truth).
 """
 
 from datetime import datetime
-from BotUtils.time import EASTERN  # noqa: F401 — re-exported for existing cog imports
+from BotUtils.time import EASTERN  # noqa: F401, re-exported for existing cog imports
 
 def get_week_deadline(week_number):
     """

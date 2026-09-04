@@ -4,7 +4,7 @@ Survivor game mode cog.
 Rules
 -----
 - Each week a player picks exactly ONE team from the week's matchups.
-- A team may only be used once per season — the bot removes the reaction
+- A team may only be used once per season, the bot removes the reaction
   and warns the user if they attempt a repeat.
 - Failing to pick before the deadline = elimination.
 - A player is eliminated when their picked team loses.
@@ -28,7 +28,7 @@ week's deadline, no new enrollments are accepted.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import discord
 from discord.ext import commands
@@ -46,7 +46,7 @@ from NFL_Locks.utils.command_names import (
 from NFL_Locks.utils.constants import NFL_TEAMS, EASTERN, emoji_to_team
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.data_utils import load_full_schedule
-from NFL_Locks.utils.schedule_utils import get_current_season, get_max_week
+from NFL_Locks.utils.schedule_utils import get_current_season, get_max_week, find_current_week
 from NFL_Locks.utils.time_utils import is_deadline_passed, get_week_deadline
 
 logger = logging.getLogger("cogs.survivor")
@@ -60,7 +60,7 @@ class SurvivorGame(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        # Channel IDs where survivor messages live — {channel_id (int)}
+        # Channel IDs where survivor messages live, {channel_id (int)}
         self.survivor_channel_ids: set[int] = set()
         # In-memory message cache: {message_id (int): week_num (int)}
         self._msg_cache: dict[int, int] = {}
@@ -165,14 +165,14 @@ class SurvivorGame(commands.Cog):
         # Confirm this is actually a matchup message (has team_a/team_b)
         matchup = await db.get_survivor_matchup_teams(payload.message_id)
         if not matchup:
-            return  # Header / footer message — ignore
+            return  # Header / footer message, ignore
 
         # Resolve the reacted team
         team = emoji_to_team(payload.emoji)
         if not team:
             return
 
-        # Deadline-blocked reactions are rejected immediately — never buffered.
+        # Deadline-blocked reactions are rejected immediately, never buffered.
         # This mirrors the behaviour in reactions.py.
         if is_deadline_passed(week_num):
             await self._remove_reaction(payload, member)
@@ -189,7 +189,7 @@ class SurvivorGame(commands.Cog):
                     )
             return
 
-        # Buffer during reconciliation — week_num already resolved above.
+        # Buffer during reconciliation, week_num already resolved above.
         if self.survivor_reconciliation_active:
             self._pending_survivor_reactions.append({
                 "type": "add",
@@ -282,7 +282,7 @@ class SurvivorGame(commands.Cog):
         used_teams = await db.get_teams_used_in_survivor(season, guild_id, user_id)
         current_pick = await db.get_survivor_pick(season, week_num, guild_id, user_id)
 
-        # Exclude current week's existing pick from "used" — swapping is allowed
+        # Exclude current week's existing pick from "used", swapping is allowed
         if current_pick:
             used_teams.discard(current_pick)
 
@@ -326,7 +326,7 @@ class SurvivorGame(commands.Cog):
                 return
             self._msg_cache[payload.message_id] = week_num
 
-        # Deadline-blocked removals are rejected immediately — never buffered.
+        # Deadline-blocked removals are rejected immediately, never buffered.
         if is_deadline_passed(week_num):
             if self._dm_allowed(payload.user_id):
                 try:
@@ -338,7 +338,7 @@ class SurvivorGame(commands.Cog):
                     )
                     await self._dm(
                         user,
-                        f"Your Survivor pick for Week {week_num} is locked — "
+                        f"Your Survivor pick for Week {week_num} is locked, "
                         f"submissions closed at {deadline_str}."
                     )
                 except Exception:
@@ -429,7 +429,7 @@ class SurvivorGame(commands.Cog):
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 return
-            # The old reaction could be on any matchup message this week — find it
+            # The old reaction could be on any matchup message this week, find it
             # by fetching the message and scanning for the right reaction.
             # We don't have the old message_id here, so we fetch from DB.
             db = get_db()
@@ -670,7 +670,7 @@ class SurvivorGame(commands.Cog):
 
                 logger.info(
                     f"[SURVIVOR REBUILD] Guild {guild_id} Week {week_number} "
-                    f"attempt {attempt} OK — +{added} added, -{removed} removed"
+                    f"attempt {attempt} OK, +{added} added, -{removed} removed"
                 )
                 return
 
@@ -678,14 +678,14 @@ class SurvivorGame(commands.Cog):
                 sleep_secs = max(backoff_secs, getattr(e, "retry_after", backoff_secs))
                 logger.warning(
                     f"[SURVIVOR REBUILD] Guild {guild_id} attempt {attempt} "
-                    f"HTTP {e.status} — sleeping {sleep_secs:.1f}s"
+                    f"HTTP {e.status}: sleeping {sleep_secs:.1f}s"
                 )
                 if attempt < len(BACKOFF_SECS):
                     await asyncio.sleep(sleep_secs)
             except Exception as e:
                 logger.warning(
                     f"[SURVIVOR REBUILD] Guild {guild_id} attempt {attempt} "
-                    f"failed: {e} — sleeping {backoff_secs}s"
+                    f"failed: {e}: sleeping {backoff_secs}s"
                 )
                 if attempt < len(BACKOFF_SECS):
                     await asyncio.sleep(backoff_secs)
@@ -734,7 +734,7 @@ class SurvivorGame(commands.Cog):
         season = get_current_season()
         winners_list = await db.get_winners(season, week)
         if not winners_list:
-            logger.warning(f"[SURVIVOR] No winners set for Week {week} — cannot process")
+            logger.warning(f"[SURVIVOR] No winners set for Week {week}: cannot process")
             return {}
 
         winners_set = set(winners_list)
@@ -767,7 +767,7 @@ class SurvivorGame(commands.Cog):
                 pick = picks_this_week.get(uid)
 
                 if not pick:
-                    # Missed the week — eliminate
+                    # Missed the week, eliminate
                     await db.eliminate_survivor_player(season, guild_id, uid, week)
                     newly_eliminated.append(uid)
                     results.append({
@@ -783,7 +783,7 @@ class SurvivorGame(commands.Cog):
                     )
 
                 elif pick not in winners_set:
-                    # Wrong pick — eliminate
+                    # Wrong pick, eliminate
                     await db.eliminate_survivor_player(season, guild_id, uid, week)
                     newly_eliminated.append(uid)
                     results.append({
@@ -799,7 +799,7 @@ class SurvivorGame(commands.Cog):
                     )
 
                 else:
-                    # Correct pick — increment streak
+                    # Correct pick, increment streak
                     new_streak = await db.increment_survivor_streak(season, guild_id, uid)
                     survivors.append(uid)
                     won_by_streak = new_streak >= SURVIVOR_WIN_STREAK
@@ -826,19 +826,22 @@ class SurvivorGame(commands.Cog):
                             f"(all-eliminated scenario) Week {week}"
                         )
 
-            # Scenario B: some survived and now nobody else is left alive
-            elif survivors:
-                remaining_alive = await db.get_alive_survivor_players(season, guild_id)
-                if len(remaining_alive) == len(survivors):
-                    # Check if previous alive count was larger (i.e. some just got eliminated)
-                    if newly_eliminated:
-                        for r in results:
-                            if r["outcome"] == "survived":
-                                r["outcome"] = "winner"
-                                logger.info(
-                                    f"[SURVIVOR] {r['user_name']} declared winner "
-                                    f"(last standing) Week {week}"
-                                )
+            # Scenario B: the field is down to a single survivor.
+            # This week's eliminations are already committed to the DB above, so
+            # re-querying alive players just returns `survivors` again and the old
+            # len(remaining_alive) == len(survivors) test was always true. That
+            # left `if newly_eliminated` as the only live condition, which crowned
+            # every survivor the first week anyone busted.
+            # Last standing means exactly one player is left, and at least one was
+            # knocked out this week so a lone entrant cannot win on a single pick.
+            elif len(survivors) == 1 and newly_eliminated:
+                for r in results:
+                    if r["outcome"] == "survived":
+                        r["outcome"] = "winner"
+                        logger.info(
+                            f"[SURVIVOR] {r['user_name']} declared winner "
+                            f"(last standing) Week {week}"
+                        )
 
             guild_results[guild_id] = results
 
@@ -866,12 +869,12 @@ class SurvivorGame(commands.Cog):
         if survived:
             lines.append("\nSURVIVED:")
             for r in survived:
-                lines.append(f"  {r['user_name']} — picked {r['team']} (streak: {r['streak']})")
+                lines.append(f"  {r['user_name']}: picked {r['team']} (streak: {r['streak']})")
 
         if eliminated:
             lines.append("\nELIMINATED:")
             for r in eliminated:
-                lines.append(f"  {r['user_name']} — picked {r['team']} (wrong)")
+                lines.append(f"  {r['user_name']}: picked {r['team']} (wrong)")
 
         if no_pick:
             lines.append("\nELIMINATED (no pick):")
@@ -908,12 +911,12 @@ class SurvivorGame(commands.Cog):
                 if mid in self._msg_cache
             ]
             # Can't map message -> channel without a DB lookup, so just clear the whole
-            # cache — it will repopulate from DB on next reaction event.
+            # cache; it will repopulate from DB on next reaction event.
             if old_ch_id != ctx.channel.id:
                 self._msg_cache.clear()
                 logger.info(
                     f"[SURVIVOR] Guild {guild_id} reassigned from channel "
-                    f"{old_ch_id} to {ctx.channel.id} — msg cache cleared"
+                    f"{old_ch_id} to {ctx.channel.id}: msg cache cleared"
                 )
 
         await db.set_survivor_config(guild_id, channel_id, start_week, season)
@@ -954,20 +957,9 @@ class SurvivorGame(commands.Cog):
         schedule = load_full_schedule()
 
         if week_num is None:
-            today = datetime.now(EASTERN)
-            for wk in range(1, get_max_week() + 1):
-                week_games = schedule.get(str(wk))
-                if not week_games:
-                    continue
-                first_game = datetime.fromisoformat(
-                    week_games[0]["date"].replace("Z", "+00:00")
-                ).astimezone(EASTERN)
-                days_since_tuesday = (first_game.weekday() - 1) % 7
-                week_start = first_game - timedelta(days=days_since_tuesday)
-                week_end = week_start + timedelta(days=6, hours=23, minutes=59)
-                if week_start <= today <= week_end:
-                    week_num = wk
-                    break
+            week_num = find_current_week(
+                schedule, datetime.now(EASTERN), get_max_week()
+            )
 
         if week_num is None:
             await ctx.send("Could not determine the current week. Pass a week number explicitly.")
@@ -1050,7 +1042,7 @@ class SurvivorGame(commands.Cog):
             await self.post_survivor_results(survivor_ch, week_num, results)
             await db.mark_survivor_results_posted(season, week_num, guild_id)
         else:
-            await ctx.send("Survivor channel not accessible — cannot post results.")
+            await ctx.send("Survivor channel not accessible, cannot post results.")
 
         await ctx.send(f"Survivor Week {week_num} processed.")
 
@@ -1107,7 +1099,7 @@ class SurvivorGame(commands.Cog):
         if alive:
             lines.append(f"**Alive ({len(alive)})**")
             for p in alive:
-                lines.append(f"  {p['user_name']} — {p['correct_streak']} correct")
+                lines.append(f"  {p['user_name']}: {p['correct_streak']} correct")
         else:
             lines.append("**No players remaining alive.**")
 
@@ -1115,7 +1107,7 @@ class SurvivorGame(commands.Cog):
             lines.append(f"\n**Eliminated ({len(eliminated)})**")
             for p in sorted(eliminated, key=lambda x: x["eliminated_week"] or 0, reverse=True):
                 lines.append(
-                    f"  {p['user_name']} — out Week {p['eliminated_week']}, "
+                    f"  {p['user_name']}: out Week {p['eliminated_week']}, "
                     f"streak was {p['correct_streak']}"
                 )
 
@@ -1159,7 +1151,7 @@ class SurvivorGame(commands.Cog):
         if player["eliminated"]:
             lines.append(f"STATUS: Eliminated in Week {player['eliminated_week']}")
         else:
-            lines.append(f"STATUS: Alive — {player['correct_streak']} correct picks")
+            lines.append(f"STATUS: Alive, {player['correct_streak']} correct picks")
 
         lines.append("\n**Pick History:**")
         for row in pick_rows:
@@ -1172,7 +1164,7 @@ class SurvivorGame(commands.Cog):
                 result = "WIN"
             else:
                 result = "LOSS"
-            lines.append(f"  Week {wk}: {team} — {result}")
+            lines.append(f"  Week {wk}: {team}: {result}")
 
         if not pick_rows:
             lines.append("  No picks recorded yet.")

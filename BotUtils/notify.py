@@ -42,5 +42,5 @@ async def _dm_admin(bot, message: str) -> None:
         owner = await bot.fetch_user(OWNER_ID)
         await owner.send(message)
     except Exception as e:
-        # Nothing left to try — write to log so at least the file captures it
+        # Nothing left to try, write to log so at least the file captures it
         logger.error(f"Could not DM admin ({OWNER_ID}): {e}. Original message: {message}")

@@ -1,5 +1,5 @@
-from BotUtils.time import EASTERN  # noqa: F401 — re-exported for existing cog imports
-from BotUtils.constants import OWNER_ID  # noqa: F401 — re-exported for existing cog imports
+from BotUtils.time import EASTERN  # noqa: F401, re-exported for existing cog imports
+from BotUtils.constants import OWNER_ID  # noqa: F401, re-exported for existing cog imports
 
 NFL_TEAMS = {
     "ARI": "<:Cardinals:1438626449631346839>",
@@ -36,7 +36,7 @@ NFL_TEAMS = {
     "WSH": "<:Commanders:1438626483051692155>"
 }
 
-# Pre-built O(1) reverse lookup tables — built once at import time.
+# Pre-built O(1) reverse lookup tables, built once at import time.
 # Maps emoji ID string (e.g. "1438626449631346839") → team abbreviation for
 # custom Discord emojis (<:Name:ID>), and raw emoji string → abbreviation for
 # standard unicode emojis.

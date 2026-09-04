@@ -63,10 +63,10 @@ def _load_custom_font(filename, size):
     return _load_font(size)
 
 
-# Supersampling scale — defined once here so font cache and _render stay in sync
+# Supersampling scale, defined once here so font cache and _render stay in sync
 _RENDER_SCALE = 2
 
-# Fonts cached at module load — loaded once, reused for every render call.
+# Fonts cached at module load, loaded once, reused for every render call.
 # Guarded by _PIL_AVAILABLE so import failures don't crash the module.
 if _PIL_AVAILABLE:
     _FC_TITLE    = _load_custom_font("freeshipping.ttf",               26 * _RENDER_SCALE)
@@ -155,7 +155,7 @@ def _render(picks_a, picks_b,
             j_adv, h_adv, f_adv, s_adv,
             close):
 
-    # Supersampling scale and fonts — pulled from module-level cache (loaded once on import)
+    # Supersampling scale and fonts, pulled from module-level cache (loaded once on import)
     SCALE      = _RENDER_SCALE
     F_TITLE    = _FC_TITLE
     F_SECTION  = _FC_SECTION

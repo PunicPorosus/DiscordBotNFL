@@ -10,10 +10,10 @@ Provides !start_locks and !end_locks commands for server administrators to:
 from discord.ext import commands
 import discord
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from NFL_Locks.utils.constants import EASTERN
 from NFL_Locks.utils.data_utils import load_full_schedule
-from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season
+from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season, find_current_week
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.status_tracker import set_guild_channel, get_guild_channel
 from NFL_Locks.utils.command_names import CMD_START_LOCKS, CMD_END_LOCKS, CMD_SERVER_STATUS
@@ -70,29 +70,17 @@ class ServerManagement(commands.Cog):
         await admin.send(f"Starting NFL Picks for {ctx.guild.name}...")
 
         # Step 1: Register the channel
-        from NFL_Locks.cogs.admin import load_server_channels, save_server_channels
-        channels = load_server_channels()
-        channels[guild_id] = channel_id
-        save_server_channels(channels)
+        # (The old JSON status file was retired; set_guild_channel is the whole job.
+        # The load_server_channels/save_server_channels imports that used to sit here
+        # referenced functions deleted from admin.py and raised ImportError, killing
+        # this command at "Step 1/4" before it registered anything.)
         await set_guild_channel(guild_id, channel_id, ctx.guild.name)
         await admin.send(f"✅ Step 1/4: Set {ctx.channel.mention} as the NFL picks channel.")
 
         # Step 2: Find current week
         schedule = load_full_schedule()
         now = datetime.now(EASTERN)
-        current_week = None
-
-        for wk in range(1, get_max_week() + 1):
-            week_games = schedule.get(str(wk))
-            if not week_games:
-                continue
-            first_game = datetime.fromisoformat(week_games[0]["date"]).replace(tzinfo=EASTERN)
-            days_since_tuesday = (first_game.weekday() - 1) % 7
-            week_start = first_game - timedelta(days=days_since_tuesday)
-            week_end = week_start + timedelta(days=6, hours=23, minutes=59)
-            if week_start <= now <= week_end:
-                current_week = wk
-                break
+        current_week = find_current_week(schedule, now, get_max_week())
 
         if not current_week:
             await admin.send("❌ Could not determine current NFL week.")
@@ -118,7 +106,7 @@ class ServerManagement(commands.Cog):
         # Step 4: Post games
         games_manager = self.bot.get_cog('GamesManager')
         if not games_manager:
-            await admin.send("❌ GamesManager cog not found — cannot post games.")
+            await admin.send("❌ GamesManager cog not found, cannot post games.")
             return
 
         week_games = schedule.get(str(week_number))
@@ -150,9 +138,9 @@ class ServerManagement(commands.Cog):
             f"Results post on Tuesdays\n"
             f"New games post automatically\n\n"
             f"**Admin Commands:**\n"
-            f"`!end_locks` — Disable picks for this server\n"
-            f"`!post_games <week>` — Post a specific week\n"
-            f"`!server_status` — View server status"
+            f"`!end_locks`: Disable picks for this server\n"
+            f"`!post_games <week>`: Post a specific week\n"
+            f"`!server_status`: View server status"
         )
         logger.info(f"Server {ctx.guild.name} ({guild_id}) started with Week {week_number}")
 
@@ -173,13 +161,7 @@ class ServerManagement(commands.Cog):
             )
             return
 
-        from NFL_Locks.cogs.admin import load_server_channels, save_server_channels
-        channels = load_server_channels()
-        if guild_id in channels:
-            del channels[guild_id]
-            save_server_channels(channels)
-
-        # Channel removal is handled via DB — set_guild_channel to 0 is not
+        # Channel removal is handled via DB, set_guild_channel to 0 is not
         # needed here; simply not having a row means the guild is inactive.
         # (The JSON status file is no longer used.)
 
@@ -212,19 +194,7 @@ class ServerManagement(commands.Cog):
         # Determine current week
         schedule = load_full_schedule()
         now = datetime.now(EASTERN)
-        current_week = None
-
-        for wk in range(1, get_max_week() + 1):
-            week_games = schedule.get(str(wk))
-            if not week_games:
-                continue
-            first_game = datetime.fromisoformat(week_games[0]["date"]).replace(tzinfo=EASTERN)
-            days_since_tuesday = (first_game.weekday() - 1) % 7
-            week_start = first_game - timedelta(days=days_since_tuesday)
-            week_end = week_start + timedelta(days=6, hours=23, minutes=59)
-            if week_start <= now <= week_end:
-                current_week = wk
-                break
+        current_week = find_current_week(schedule, now, get_max_week())
 
         # Check game posting status from DB
         current_week_status = "N/A"
@@ -253,9 +223,9 @@ class ServerManagement(commands.Cog):
             f"Lock summaries at deadline\n"
             f"Reaction tracking\n\n"
             f"**Admin Commands:**\n"
-            f"`!end_locks` — Disable picks\n"
-            f"`!post_games <week>` — Post specific week\n"
-            f"`!force_reaction_catchup` — Sync reactions"
+            f"`!end_locks`: Disable picks\n"
+            f"`!post_games <week>`: Post specific week\n"
+            f"`!force_reaction_catchup`: Sync reactions"
         )
         await ctx.send(status_msg)
 

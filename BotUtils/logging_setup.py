@@ -5,7 +5,7 @@ Sets up a consistent log format across all cogs and modules:
     2026-04-26 15:41:01 STARTUP:INFO: ✅ Loaded NFL_Locks.cogs.admin
 
 The DESIGNATOR field identifies which part of the bot the log came from,
-derived automatically from the logger name — no changes needed in individual cogs.
+derived automatically from the logger name, no changes needed in individual cogs.
 
 Designator mapping (prefix-based):
     startup.*   →  STARTUP   (bot.py lifecycle, extension loading)
@@ -28,7 +28,7 @@ LOG_DIR = Path(__file__).parent.parent / "data"
 LOG_FILE = LOG_DIR / "bot.log"
 
 # Maps logger name prefixes to human-readable designators.
-# Order matters — more specific prefixes should come first.
+# Order matters, more specific prefixes should come first.
 _DESIGNATOR_MAP = [
     ("startup",     "STARTUP"),
     ("cogs.",       "LOCKS"),

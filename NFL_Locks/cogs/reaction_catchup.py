@@ -3,13 +3,17 @@
 from discord.ext import commands, tasks
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from NFL_Locks.utils.constants import EASTERN
 from NFL_Locks.utils.data_utils import load_full_schedule
 from NFL_Locks.utils.time_utils import get_week_deadline
 from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season, find_current_week
 from NFL_Locks.utils.database import get_db
-from NFL_Locks.utils.command_names import CMD_FORCE_REACTION_CATCHUP
+from NFL_Locks.utils.command_names import (
+    CMD_FORCE_REACTION_CATCHUP,
+    CMD_UPDATE_REACTIONS,
+    CMD_PROCESS_EXISTING,
+)
 
 logger = logging.getLogger('cogs.reaction_catchup')
 
@@ -22,6 +26,10 @@ class ReactionCatchup(commands.Cog):
         self.last_catchup_time = {}   # {week: datetime}
         self.synced_weeks_final = set()  # Weeks that have had final pre-deadline sync
         self.is_processing = False
+        # Serializes process_week_reactions. is_processing above only ever
+        # guarded periodic_catchup, not the rebuild itself, so the three
+        # startup_coordinator call sites could overlap each other.
+        self._rebuild_lock = asyncio.Lock()
 
         self.periodic_catchup.add_exception_type(Exception)
         self.periodic_catchup.start()
@@ -70,13 +78,13 @@ class ReactionCatchup(commands.Cog):
                 return
 
             logger.info(
-                f"[PRE-DEADLINE SYNC] Running final sync for Week {current_week} — "
+                f"[PRE-DEADLINE SYNC] Running final sync for Week {current_week}: "
                 f"deadline in {int(time_until)} min at {deadline.strftime('%I:%M %p ET')}"
             )
 
             configured_guilds = await get_db().get_all_configured_guilds()
 
-            # Announce before sync — locks channels
+            # Announce before sync, locks channels
             for guild_id, channel_id in configured_guilds.items():
                 channel = self.bot.get_channel(channel_id)
                 if channel:
@@ -92,7 +100,7 @@ class ReactionCatchup(commands.Cog):
                     except Exception as e:
                         logger.error(f"Error announcing in guild {guild_id}: {e}")
 
-            # Announce before sync — survivor channels (separate from locks)
+            # Announce before sync, survivor channels (separate from locks)
             survivor_cog = self.bot.get_cog('SurvivorGame')
             if survivor_cog:
                 survivor_configs = await get_db().get_all_survivor_configs()
@@ -104,7 +112,7 @@ class ReactionCatchup(commands.Cog):
                                 f"**Survivor Final Sync Notice**\n\n"
                                 f"Survivor picks are being synced for Week {current_week}.\n"
                                 f"**Deadline:** {deadline.strftime('%A at %I:%M %p ET')}\n\n"
-                                f"Make your final pick NOW — changes will be **LOCKED** in ~30 seconds."
+                                f"Make your final pick NOW, changes will be **LOCKED** in ~30 seconds."
                             )
                         except Exception as e:
                             logger.error(
@@ -112,12 +120,23 @@ class ReactionCatchup(commands.Cog):
                                 f"{scfg['channel_id']}: {e}"
                             )
 
-            await self.process_week_reactions(current_week)
+            sync_ok = await self.process_week_reactions(current_week)
 
-            self.synced_weeks_final.add(current_week)
+            # Only bank the sync if every guild actually reconciled. Marking it
+            # done on failure was what made a failed pre-deadline sync final:
+            # the buffer was already discarded and nothing tried again before
+            # the lock. Leaving it unbanked lets the remaining ticks inside the
+            # 10-20 minute window retry, which bounds retries to this window.
+            if sync_ok:
+                self.synced_weeks_final.add(current_week)
+            else:
+                logger.error(
+                    f"[PRE-DEADLINE SYNC] Week {current_week} did not fully "
+                    f"reconcile; leaving it unsynced so the next tick retries"
+                )
             self.last_catchup_time[current_week] = datetime.now(EASTERN)
 
-            # Announce completion — locks channels
+            # Announce completion, locks channels
             for guild_id, channel_id in configured_guilds.items():
                 channel = self.bot.get_channel(channel_id)
                 if channel:
@@ -130,7 +149,7 @@ class ReactionCatchup(commands.Cog):
                     except Exception as e:
                         logger.error(f"Error announcing completion in guild {guild_id}: {e}")
 
-            # Announce completion — survivor channels
+            # Announce completion, survivor channels
             if survivor_cog:
                 for scfg in survivor_configs:
                     s_channel = self.bot.get_channel(scfg["channel_id"])
@@ -147,7 +166,7 @@ class ReactionCatchup(commands.Cog):
                                 f"{scfg['channel_id']}: {e}"
                             )
 
-            logger.info(f"[PRE-DEADLINE SYNC] Complete for Week {current_week} — reactions now locked")
+            logger.info(f"[PRE-DEADLINE SYNC] Complete for Week {current_week}: reactions now locked")
 
         except Exception as e:
             logger.error(f"Error in periodic_catchup: {e}", exc_info=True)
@@ -156,7 +175,26 @@ class ReactionCatchup(commands.Cog):
 
     # -- Core rebuild ----------------------------------------------------------
 
-    async def process_week_reactions(self, week_number: int):
+    async def process_week_reactions(self, week_number: int) -> bool:
+        """Rebuild picks for a week, serialized against any other rebuild.
+
+        startup_coordinator calls the rebuild from three places and a reconnect
+        can trigger a fourth while one is still running. Without mutual
+        exclusion, whichever finished first ran the `finally` block below,
+        lifting the reconciliation gate and clearing pending_reactions while the
+        other was mid-rebuild, discarding live picks.
+
+        Returns True if every configured guild reconciled successfully.
+        """
+        if self._rebuild_lock.locked():
+            logger.info(
+                f"[REBUILD] Week {week_number} requested while another rebuild "
+                f"is in flight; queued behind it"
+            )
+        async with self._rebuild_lock:
+            return await self._process_week_reactions(week_number)
+
+    async def _process_week_reactions(self, week_number: int) -> bool:
         """
         Rebuild all picks from scratch for a specific week.
 
@@ -182,6 +220,7 @@ class ReactionCatchup(commands.Cog):
 
         logger.info(f"[REBUILD] Syncing reactions for Week {week_number} (season {season})")
 
+        all_guilds_ok = True
         reactions_cog.reconciliation_active = True
         try:
             for guild_id, channel_id in configured_guilds.items():
@@ -192,13 +231,20 @@ class ReactionCatchup(commands.Cog):
 
                 if success:
                     logger.info(
-                        f"[REBUILD] Guild {guild_id_str} OK — "
+                        f"[REBUILD] Guild {guild_id_str} OK, "
                         f"{picks_written} reactions written; flushing buffer"
                     )
                     await reactions_cog.flush_pending_reactions(guild_id_str)
+                    # M8: clear_reconciliation_failed had zero callers, so a
+                    # guild marked failed stayed failed forever, even after a
+                    # later rebuild worked.
+                    await db.clear_reconciliation_failed(
+                        season, week_number, guild_id_str
+                    )
                 else:
+                    all_guilds_ok = False
                     logger.error(
-                        f"[REBUILD] Guild {guild_id_str} FAILED — "
+                        f"[REBUILD] Guild {guild_id_str} FAILED, "
                         f"discarding buffer and marking failed in DB"
                     )
                     reactions_cog.clear_pending_for_guild(guild_id_str)
@@ -215,11 +261,13 @@ class ReactionCatchup(commands.Cog):
             reactions_cog.pending_reactions.clear()
             logger.info(f"[REBUILD] Reconciliation gate lifted for Week {week_number}")
 
-        # Survivor uses its own gate + rebuild — delegate after locks finishes
+        # Survivor uses its own gate + rebuild, delegate after locks finishes
         # so the two rebuilds don't race on Discord rate limits.
         survivor_cog = self.bot.get_cog('SurvivorGame')
         if survivor_cog:
             await survivor_cog.process_week_survivor_reactions(week_number)
+
+        return all_guilds_ok
 
     async def _reconcile_guild(
         self,
@@ -248,20 +296,20 @@ class ReactionCatchup(commands.Cog):
             logger.debug(
                 f"[REBUILD] No tracked messages for guild {guild_id_str}, Week {week_number}"
             )
-            return 0, True  # Nothing to do — not a failure
+            return 0, True  # Nothing to do, not a failure
 
         guild = self.bot.get_guild(int(guild_id_str))
         if not guild:
-            logger.warning(f"[REBUILD] Guild {guild_id_str} not in cache — skipping")
+            logger.warning(f"[REBUILD] Guild {guild_id_str} not in cache, skipping")
             return 0, False
 
         int_keyed = {int(cid): mids for cid, mids in messages_by_channel.items()}
 
-        # Build matchup map once before retry loop — it's a pure DB read and
+        # Build matchup map once before retry loop, it's a pure DB read and
         # doesn't need to be repeated on each attempt.
         matchup_map = await db.get_matchup_map_for_week(season, week_number, guild_id_str)
         logger.debug(
-            f"[REBUILD] Guild {guild_id_str} — {len(matchup_map)} matchup messages mapped"
+            f"[REBUILD] Guild {guild_id_str}: {len(matchup_map)} matchup messages mapped"
         )
 
         for attempt, backoff_secs in enumerate(BACKOFF_SECS, start=1):
@@ -281,7 +329,7 @@ class ReactionCatchup(commands.Cog):
                 # Fetch current DB state: {user_id: set[team]}
                 db_state = await db.get_picks_by_user_id(season, week_number, guild_id_str)
 
-                # Apply delta — only write what changed
+                # Apply delta, only write what changed
                 added = 0
                 removed = 0
 
@@ -303,7 +351,7 @@ class ReactionCatchup(commands.Cog):
                         removed += 1
 
                 logger.info(
-                    f"[REBUILD] Guild {guild_id_str} attempt {attempt} success — "
+                    f"[REBUILD] Guild {guild_id_str} attempt {attempt} success, "
                     f"+{added} added, -{removed} removed"
                 )
                 return added + removed, True
@@ -312,13 +360,13 @@ class ReactionCatchup(commands.Cog):
                 if e.status == 429:
                     sleep_secs = max(backoff_secs, getattr(e, 'retry_after', backoff_secs))
                     logger.warning(
-                        f"[REBUILD] Guild {guild_id_str} attempt {attempt} — "
+                        f"[REBUILD] Guild {guild_id_str} attempt {attempt}: "
                         f"rate limited (429); sleeping {sleep_secs:.1f}s"
                     )
                 else:
                     sleep_secs = backoff_secs
                     logger.warning(
-                        f"[REBUILD] Guild {guild_id_str} attempt {attempt} — "
+                        f"[REBUILD] Guild {guild_id_str} attempt {attempt}: "
                         f"HTTP {e.status}; sleeping {sleep_secs}s"
                     )
                 if attempt < len(BACKOFF_SECS):
@@ -349,49 +397,22 @@ class ReactionCatchup(commands.Cog):
                 )
         else:
             logger.warning(
-                f"Admin notification channel {channel_id} not found — message: {message}"
+                f"Admin notification channel {channel_id} not found, message: {message}"
             )
 
     # -- Startup catchup -------------------------------------------------------
-
-    @tasks.loop(count=1)
-    async def initial_catchup(self):
-        """Run once after bot startup to establish a baseline for the current week."""
-        await self.bot.wait_until_ready()
-        await asyncio.sleep(10)  # Allow other cogs to finish initializing
-
-        logger.info("Running initial reaction catchup after startup...")
-
-        try:
-            now = datetime.now(EASTERN)
-            schedule = load_full_schedule()
-
-            current_week = find_current_week(schedule, now, get_max_week())
-            if not current_week:
-                logger.info("Not in an active NFL week, skipping initial catchup")
-                return
-
-            deadline = get_week_deadline(current_week)
-            if not deadline or now >= deadline:
-                logger.info(f"Week {current_week} deadline passed, skipping initial catchup")
-                return
-
-            await self.process_week_reactions(current_week)
-            self.last_catchup_time[current_week] = now
-            logger.info(f"Initial reaction catchup complete for Week {current_week}")
-
-        except Exception as e:
-            logger.error(f"Error in initial_catchup: {e}", exc_info=True)
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        """Start initial catchup when bot is ready."""
-        if not self.initial_catchup.is_running():
-            self.initial_catchup.start()
+    # initial_catchup and its on_ready listener were deleted here.
+    # StartupCoordinator already owns startup sequencing and calls
+    # process_week_reactions itself (with the same deadline check this
+    # duplicated). Running both meant two rebuilds in flight at once with no
+    # mutual exclusion; see the lock in process_week_reactions above.
 
     # -- Admin command ---------------------------------------------------------
 
-    @commands.command(name=CMD_FORCE_REACTION_CATCHUP)
+    @commands.command(
+        name=CMD_FORCE_REACTION_CATCHUP,
+        aliases=[CMD_UPDATE_REACTIONS, CMD_PROCESS_EXISTING],
+    )
     @commands.has_permissions(administrator=True)
     async def force_reaction_catchup(self, ctx, week_num: int = None):
         """

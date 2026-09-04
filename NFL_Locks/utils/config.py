@@ -1,5 +1,5 @@
 """
-NFL Locks Bot — Central Configuration
+NFL Locks Bot, Central Configuration
 ======================================
 All magic numbers and tunable constants live here.
 Change a value once and it takes effect across the entire bot.
@@ -72,6 +72,20 @@ TEMP_MESSAGE_DELETE_SECONDS = 5.0  # Seconds before temporary bot messages self-
 ESPN_API_TIMEOUT_SECONDS = 15      # aiohttp total timeout for ESPN API calls
 FETCH_WINNERS_TIMEOUT_SECONDS = 8  # Timeout for winner-fetch subprocess
 SCHEDULE_UPDATE_TIMEOUT_SECONDS = 300  # Timeout for schedule update subprocess
+
+# -- Winners -------------------------------------------------------------------
+# Hours after a week's estimated end to keep retrying an incomplete ESPN result
+# set before storing it anyway. Without a ceiling, one game ESPN never marks
+# complete would block that week's winners forever, and _find_week_to_post would
+# stall every later week behind it.
+WINNERS_INCOMPLETE_GRACE_HOURS = 6
+
+# -- Week Boundary -------------------------------------------------------------
+# Hour (ET) on Tuesday at which one NFL week ends and the next begins.
+# Fixed wall-clock time, deliberately not derived from kickoff. Late enough that
+# the latest Monday night game (kickoff 8:15 PM + 4h) is long finished, early
+# enough that the flip happens before Tuesday's 8 AM results/matchup automation.
+WEEK_BOUNDARY_HOUR = 3
 
 # -- Discord / Message Limits --------------------------------------------------
 MAX_ERROR_MESSAGE_CHARS = 500      # Truncation limit for error text sent to Discord

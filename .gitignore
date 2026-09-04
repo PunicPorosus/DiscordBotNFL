@@ -66,3 +66,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Working notes / audits - kept local, not in the repo
+*.md

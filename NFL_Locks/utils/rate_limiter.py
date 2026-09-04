@@ -22,7 +22,7 @@ from collections import defaultdict
 logger = logging.getLogger("nfl_locks.rate_limiter")
 
 # Discord limit: 5 per 5 s per channel = 1.00/s.
-# We pace at 1.1 s — 10 % headroom — so we never reach the wall.
+# We pace at 1.1 s, 10 % headroom, so we never reach the wall.
 _SEND_INTERVAL = 1.1  # seconds between sends to the same channel
 
 
@@ -48,8 +48,8 @@ class ChannelRateLimiter:
         """
         Rate-limited send.  Signature mirrors discord.abc.Messageable.send().
 
-        destination — any Messageable (TextChannel, DMChannel, User, ctx, …)
-        *args / **kwargs — forwarded verbatim to destination.send()
+        destination, any Messageable (TextChannel, DMChannel, User, ctx, …)
+        *args / **kwargs, forwarded verbatim to destination.send()
         """
         dest_id = destination.id
         lock = self._get_lock(dest_id)
@@ -70,7 +70,7 @@ class ChannelRateLimiter:
         """
         Rate-limited message.reply().  Paces on the message's channel id.
 
-        message — discord.Message
+        message, discord.Message
         """
         dest_id = message.channel.id
         lock = self._get_lock(dest_id)
@@ -85,5 +85,5 @@ class ChannelRateLimiter:
             return result
 
 
-# Process-wide singleton — import this everywhere.
+# Process-wide singleton, import this everywhere.
 rate_limiter = ChannelRateLimiter()

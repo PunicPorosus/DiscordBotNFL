@@ -36,8 +36,8 @@ class StatusMigration(commands.Cog):
         """Show DB-backed status info for the current (or given) week (owner only).
 
         Usage:
-          !status_info        — current week
-          !status_info 15     — Week 15
+          !status_info, current week
+          !status_info 15, Week 15
         """
         try:
             from NFL_Locks.utils.status_tracker import get_pending_work
@@ -60,8 +60,8 @@ class StatusMigration(commands.Cog):
                 lines.append(
                     f"**Week {wk}**\n"
                     f"  winners fetched:    {'✅' if not entry['needs_winners'] else '❌'}\n"
-                    f"  deadline passed:    {'✅' if entry['deadline_passed'] else '—'}\n"
-                    f"  reactions final:    {'✅' if entry['reactions_finalized'] else '—'}\n"
+                    f"  deadline passed:    {'✅' if entry['deadline_passed'] else ', '}\n"
+                    f"  reactions final:    {'✅' if entry['reactions_finalized'] else ', '}\n"
                     f"  guilds need games:  {len(entry['guilds_needing_games'])}\n"
                     f"  guilds need results:{len(entry['guilds_needing_results'])}\n"
                     f"  guilds need locks:  {len(entry['guilds_needing_locks'])}\n"
@@ -82,8 +82,8 @@ class StatusMigration(commands.Cog):
         week-level flags (winners_fetched, deadline_passed, reactions_finalized).
 
         Usage:
-          !clear_pending_work 15   — reset Week 15
-          !clear_pending_work      — reset the most recent tracked week
+          !clear_pending_work 15, reset Week 15
+          !clear_pending_work, reset the most recent tracked week
         """
         try:
             db = get_db()

@@ -132,7 +132,7 @@ def ask_options() -> tuple[str, bool] | None:
 def main() -> None:
     choice = ask_options()
     if choice is None:
-        return  # user cancelled — do nothing, leave existing bot running
+        return  # user cancelled, do nothing, leave existing bot running
 
     env_arg, use_console = choice
 

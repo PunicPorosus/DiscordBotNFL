@@ -3,7 +3,7 @@ NFL Locks database layer.
 
 Uses aiosqlite for non-blocking I/O inside Discord's async event loop.
 All Discord user IDs and guild IDs are stored as TEXT to avoid 64-bit integer
-overflow — SQLite integers are signed 64-bit and Discord snowflakes can exceed
+overflow, SQLite integers are signed 64-bit and Discord snowflakes can exceed
 the signed range on some platforms.
 
 Migration note
@@ -815,7 +815,7 @@ class NFLLocksDB:
     async def refresh_guild_names(self, guild_map: dict[int, str]):
         """Batch-update guild display names from live Discord data.
 
-        guild_map — {guild_id: guild_name} for every guild the bot can see.
+        guild_map, {guild_id: guild_name} for every guild the bot can see.
         Only updates rows that already exist in guild_config; does not
         create new rows.
         """
@@ -1002,7 +1002,7 @@ class NFLLocksDB:
                 )
 
         # Week status and week_guild_status
-        # Use season 2025 as a reasonable default — this migration only runs once
+        # Use season 2025 as a reasonable default, this migration only runs once
         # on the first boot after upgrading, so the season is always the current one.
         # We use 2025 as a safe fallback; adjust if your season differs.
         try:
@@ -1079,7 +1079,7 @@ class NFLLocksDB:
         delete them from the live DB.
 
         Only season-tagged tables are touched.  ``guild_config`` and
-        ``bot_meta`` are intentionally left intact — they contain
+        ``bot_meta`` are intentionally left intact, they contain
         configuration state that spans seasons, not pick data.
 
         Returns ``{table_name: rows_deleted}`` for logging/notification.
@@ -1497,7 +1497,7 @@ def get_db() -> "NFLLocksDB":
     """
     Return the process-wide NFLLocksDB singleton.
 
-    ``await get_db().connect()`` must be called once before any queries —
+    ``await get_db().connect()`` must be called once before any queries, 
     bot.py does this in ``main()`` before loading any extensions, so all cogs
     receive a live connection from the moment they load.
 

@@ -1,5 +1,5 @@
 """
-Locks cog — posts a pick summary when a week's reaction deadline arrives,
+Locks cog, posts a pick summary when a week's reaction deadline arrives,
 then marks that week/guild as locked so the catchup won't re-post it.
 """
 
@@ -30,6 +30,8 @@ class Locks(commands.Cog):
         """Every 5 minutes, check if a week's reaction lock time has arrived."""
         now = datetime.now(EASTERN)
         schedule = load_full_schedule()
+        db = get_db()
+        season = get_current_season()
 
         for wk in range(1, get_max_week() + 1):
             if not schedule.get(str(wk)):
@@ -39,10 +41,30 @@ class Locks(commands.Cog):
             if not lock_time:
                 continue
 
-            # Fire within the 5-minute window after the deadline
-            if 0 <= (now - lock_time).total_seconds() < 300:
-                logger.info(f"Deadline reached for Week {wk} — posting lock summaries")
+            elapsed = (now - lock_time).total_seconds()
+            if elapsed < 0:
+                continue
+
+            # Record that the deadline is behind us, independently of whether we
+            # are still inside the posting window below.
+            # startup_coordinator.catchup_locks gates on this flag via
+            # needs_locks_posted(), and nothing in the codebase ever set it, so
+            # week_status.deadline_passed stayed 0 forever and a lock summary
+            # missed during an outage could never be recovered. Setting it here
+            # (before posting, so a mid-post crash still leaves it set) is what
+            # makes that catchup path live.
+            if not await db.has_deadline_passed(season, wk):
+                await db.mark_deadline_passed(season, wk)
+
+            # Post the summary within the 5-minute window after the deadline
+            if elapsed < 300:
+                logger.info(f"Deadline reached for Week {wk}, posting lock summaries")
                 await self.lock_reactions_for_week(wk)
+
+    @check_lock_times.before_loop
+    async def _before_check_lock_times(self):
+        """The loop must not fire before the bot has guilds and channels."""
+        await self.bot.wait_until_ready()
 
     # -- Core lock method ------------------------------------------------------
 
@@ -88,7 +110,7 @@ class Locks(commands.Cog):
 
         if not picks:
             await rate_limiter.send(channel,
-                f"**Week {week_number} — Picks Locked!**\n"
+                f"**Week {week_number}: Picks Locked!**\n"
                 f"No picks were recorded for this week."
             )
             return
@@ -99,7 +121,7 @@ class Locks(commands.Cog):
             for user in users:
                 user_picks.setdefault(user, []).append(team)
 
-        lines = [f"**Week {week_number} — Picks Locked!**\n"]
+        lines = [f"**Week {week_number}: Picks Locked!**\n"]
         for user in sorted(user_picks.keys()):
             teams = sorted(user_picks[user])
             lines.append(f"**{user}**: {', '.join(teams)}")

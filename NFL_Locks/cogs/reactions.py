@@ -5,9 +5,8 @@ import asyncio
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.constants import NFL_TEAMS, EASTERN, emoji_to_team
 from NFL_Locks.utils.time_utils import is_deadline_passed, get_week_deadline
-from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season
-from datetime import datetime, timedelta
-from NFL_Locks.utils.command_names import CMD_UPDATE_REACTIONS, CMD_PROCESS_EXISTING
+from NFL_Locks.utils.schedule_utils import get_current_season
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +247,7 @@ class Reactions(commands.Cog):
             season, week_num, guild_id, user_id, team_a, team_b
         )
         # prior_pick will be `team` itself (just inserted) unless the opponent
-        # was already there — so only act when the conflict is the opponent.
+        # was already there, so only act when the conflict is the opponent.
         if prior_pick != opponent:
             return
 
@@ -281,7 +280,7 @@ class Reactions(commands.Cog):
             if not channel:
                 return
             message = await channel.fetch_message(int(message_id))
-            # member may be None on some paths — fetch if needed
+            # member may be None on some paths, fetch if needed
             target = member
             if target is None:
                 try:
@@ -347,7 +346,7 @@ class Reactions(commands.Cog):
 
             if self._check_dm_cooldown(payload.user_id):
                 try:
-                    # payload.member is None on remove events — fetch the user explicitly
+                    # payload.member is None on remove events, fetch the user explicitly
                     user = await self.bot.fetch_user(payload.user_id)
                     deadline_str = deadline.strftime("%A, %B %d at %I:%M %p ET")
                     await user.send(
@@ -361,7 +360,7 @@ class Reactions(commands.Cog):
                 except Exception as e:
                     logger.error(f"Error sending DM: {e}")
 
-            # Do NOT restore the reaction — just prevent the data removal
+            # Do NOT restore the reaction, just prevent the data removal
             return
 
         team = emoji_to_team(payload.emoji)
@@ -387,7 +386,7 @@ class Reactions(commands.Cog):
         season = get_current_season()
         db = get_db()
 
-        # Resolve display name for logging — best-effort from guild member cache
+        # Resolve display name for logging, best-effort from guild member cache
         guild = self.bot.get_guild(payload.guild_id)
         member = guild.get_member(payload.user_id) if guild else None
         user_name = member.name if member else str(payload.user_id)
@@ -416,160 +415,14 @@ class Reactions(commands.Cog):
         return await db.get_week_for_message(message_id)
 
     # -- Admin commands --------------------------------------------------------
-
-    @commands.command(name=CMD_UPDATE_REACTIONS)
-    @commands.has_permissions(administrator=True)
-    async def update_reactions(self, ctx, week_num: int = None):
-        """
-        Rebuild picks for a week from live Discord reactions.
-
-        Clears all existing picks for the calling guild and re-inserts from
-        current reaction state. If week_num is omitted the current week is used.
-        """
-        if week_num is None:
-            from NFL_Locks.utils.data_utils import load_full_schedule
-
-            today = datetime.now(EASTERN)
-            schedule = load_full_schedule()
-
-            for wk in range(1, get_max_week() + 1):
-                week_games = schedule.get(str(wk))
-                if not week_games:
-                    continue
-
-                first_game = datetime.fromisoformat(week_games[0]["date"]).replace(tzinfo=EASTERN)
-                days_since_tuesday = (first_game.weekday() - 1) % 7
-                week_start = first_game - timedelta(days=days_since_tuesday)
-                week_end = week_start + timedelta(days=6, hours=23, minutes=59)
-
-                if week_start <= today <= week_end:
-                    week_num = wk
-                    break
-
-            if week_num is None:
-                await ctx.send("❌ Could not determine current week.")
-                return
-
-        if not (1 <= week_num <= get_max_week()):
-            await ctx.send(f"❌ Week number must be between 1 and {get_max_week()}.")
-            return
-
-        await ctx.send(f"Updating reactions for Week {week_num}...")
-
-        guild_id = str(ctx.guild.id)
-        season = get_current_season()
-        db = get_db()
-
-        messages_by_channel = await db.get_messages_for_week(season, week_num, guild_id)
-
-        if not messages_by_channel:
-            await ctx.send("❌ No tracked messages found for this server.")
-            return
-
-        await db.clear_picks_for_week(season, week_num, guild_id)
-
-        emoji_to_team = self._build_emoji_map()
-        updated_count = 0
-
-        for channel_id_str, message_ids in messages_by_channel.items():
-            channel = self.bot.get_channel(int(channel_id_str))
-            if not channel:
-                logger.warning(f"Channel {channel_id_str} not found — skipping")
-                continue
-
-            for msg_id in message_ids:
-                try:
-                    message = await channel.fetch_message(msg_id)
-                except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"Message {msg_id} not accessible in channel {channel_id_str}")
-                    continue
-                except Exception as e:
-                    logger.error(f"Error fetching message {msg_id}: {e}")
-                    continue
-
-                for reaction in message.reactions:
-                    team = self._reaction_str_to_team(str(reaction.emoji), emoji_to_team)
-                    if not team:
-                        continue
-
-                    async for user in reaction.users():
-                        if user.bot:
-                            continue
-                        inserted = await db.add_pick(
-                            season=season,
-                            week=week_num,
-                            guild_id=guild_id,
-                            user_id=str(user.id),
-                            user_name=user.name,
-                            team=team,
-                        )
-                        if inserted:
-                            updated_count += 1
-
-        await ctx.send(
-            f"✅ Updated Week {week_num} reactions!\n"
-            f"Total picks recorded: {updated_count}"
-        )
-
-    @commands.command(name=CMD_PROCESS_EXISTING)
-    @commands.has_permissions(administrator=True)
-    async def process_existing_reactions(self, ctx, week_num: int):
-        """
-        Additively process reactions on tracked messages for a week.
-
-        Unlike !update_reactions this does NOT clear first — it only adds
-        picks that are missing. Useful for catching up after a brief outage.
-        """
-        await ctx.send(f"Processing existing reactions for Week {week_num}...")
-
-        guild_id = str(ctx.guild.id)
-        season = get_current_season()
-        db = get_db()
-
-        messages_by_channel = await db.get_messages_for_week(season, week_num, guild_id)
-
-        if not messages_by_channel:
-            await ctx.send("No tracked messages found for this server.")
-            return
-
-        processed = 0
-        not_found = 0
-
-        for channel_id_str, message_ids in messages_by_channel.items():
-            channel = self.bot.get_channel(int(channel_id_str))
-            if not channel:
-                logger.warning(f"Channel {channel_id_str} not found — skipping")
-                not_found += len(message_ids)
-                continue
-
-            for message_id in message_ids:
-                try:
-                    message = await channel.fetch_message(message_id)
-                except (discord.NotFound, discord.Forbidden):
-                    not_found += 1
-                    continue
-                except Exception as e:
-                    logger.error(f"Error fetching message {message_id}: {e}")
-                    not_found += 1
-                    continue
-
-                for reaction in message.reactions:
-                    async for user in reaction.users():
-                        if user.bot:
-                            continue
-                        await self._process_reaction_internal(
-                            guild_id=guild_id,
-                            user_id=str(user.id),
-                            user_name=user.name,
-                            emoji=reaction.emoji,
-                            week_num=week_num,
-                        )
-                        processed += 1
-
-        result_msg = f"Processed {processed} existing reactions"
-        if not_found > 0:
-            result_msg += f"\n{not_found} messages not found"
-        await ctx.send(result_msg)
+    # !update_reactions and !process_existing_reactions were removed here.
+    # Both rebuilt picks outside the matchup guard: update_reactions called
+    # db.add_pick directly, so an offline user who reacted to both teams in a
+    # game had that invalid pair faithfully restored, and
+    # process_existing_reactions called _process_reaction_internal without the
+    # message_id the guard needs. Both names are now aliases of
+    # !force_reaction_catchup, which rebuilds through build_reaction_state with
+    # the matchup map and is the only correct rebuild path.
 
     # -- Reconciliation buffer helpers -----------------------------------------
 
@@ -624,7 +477,7 @@ class Reactions(commands.Cog):
         """
         Discard buffered reactions for a guild without writing them.
 
-        Called when reconciliation fails for a guild — DB state is undefined
+        Called when reconciliation fails for a guild, DB state is undefined
         so the buffer should not be applied.
         """
         before = len(self.pending_reactions)

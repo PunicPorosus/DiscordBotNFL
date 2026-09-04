@@ -76,7 +76,7 @@ class Database:
             )
             await self._conn.commit()
         except Exception:
-            pass  # Column already exists — expected on all runs after the first
+            pass  # Column already exists, expected on all runs after the first
 
     # -- Draft cache --------------------------------------------------------
 

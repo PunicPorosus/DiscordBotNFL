@@ -4,10 +4,12 @@ import asyncio
 from datetime import datetime, timedelta
 from NFL_Locks.utils.constants import EASTERN
 from NFL_Locks.utils.data_utils import load_full_schedule
-from NFL_Locks.utils.espn_api import fetch_nfl_winners
+from NFL_Locks.utils.espn_api import fetch_nfl_results
 from NFL_Locks.utils.schedule_utils import get_max_week, get_current_week_info, get_current_season
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.command_names import CMD_FETCH_WINNERS, CMD_SHOW_WINNERS
+from NFL_Locks.utils.config import WINNERS_INCOMPLETE_GRACE_HOURS
+from BotUtils.notify import notify_admin
 
 logger = logging.getLogger('cogs.winners')
 
@@ -38,7 +40,7 @@ class Winners(commands.Cog):
             candidates = [w for w in (previous_week, current_week) if w]
         else:
             # Off-season: backfill winner data for any weeks missing it.
-            # This is a read-only data operation — it does NOT trigger result
+            # This is a read-only data operation; it does NOT trigger result
             # posting (catchup_results has its own staleness window for that).
             logger.info("Off-season: scanning all weeks for missing winner data")
             candidates = [
@@ -74,10 +76,15 @@ class Winners(commands.Cog):
         season = get_current_season()
         db = get_db()
 
-        if await db.has_winners(season, week_num):
-            logger.debug(f"Week {week_num} already has winners in DB")
-            existing = await db.get_winners(season, week_num)
-            return existing
+        # needs_winners() is False only once a week has been confirmed complete.
+        # Short-circuiting on has_winners() alone was what made a partial list
+        # permanent: the first fetch stored whatever came back and every later
+        # call returned it without ever looking at ESPN again.
+        if await db.has_winners(season, week_num) and not await db.needs_winners(
+            season, week_num
+        ):
+            logger.debug(f"Week {week_num} already has complete winners in DB")
+            return await db.get_winners(season, week_num)
 
         schedule = load_full_schedule()
         week_games = schedule.get(str(week_num))
@@ -113,7 +120,9 @@ class Winners(commands.Cog):
 
         logger.info(f"Week {week_num} has ended, fetching winners from ESPN...")
         try:
-            winners = await asyncio.wait_for(fetch_nfl_winners(week_num, season=season), timeout=8)
+            results = await asyncio.wait_for(
+                fetch_nfl_results(week_num, season=season), timeout=8
+            )
         except asyncio.TimeoutError:
             logger.error(f"Timeout fetching winners for week {week_num}")
             return None
@@ -121,12 +130,54 @@ class Winners(commands.Cog):
             logger.error(f"Error fetching winners for week {week_num}: {e}", exc_info=True)
             return None
 
+        if not results:
+            logger.warning(f"No response from ESPN for week {week_num}")
+            return None
+
+        winners = results["winners"]
+        expected_games = len(week_games)
+        complete = results["completed"] >= expected_games
+
+        if not complete:
+            # Judge completeness on finished games, not on len(winners): a tie is
+            # a finished game that yields no winner, so counting winners would
+            # treat any tied week as permanently incomplete.
+            grace_until = week_end + timedelta(hours=WINNERS_INCOMPLETE_GRACE_HOURS)
+            if now < grace_until:
+                logger.warning(
+                    f"Week {week_num} incomplete: ESPN reports "
+                    f"{results['completed']}/{expected_games} games finished. "
+                    f"Not storing; will retry until "
+                    f"{grace_until.strftime('%a %I:%M %p ET')}"
+                )
+                return None
+
+            logger.error(
+                f"Week {week_num} still incomplete "
+                f"({results['completed']}/{expected_games}) past the "
+                f"{WINNERS_INCOMPLETE_GRACE_HOURS}h grace window; storing anyway "
+                f"so results are not blocked"
+            )
+            await notify_admin(
+                self.bot,
+                f"**Week {week_num} winners stored incomplete.** ESPN reported "
+                f"{results['completed']} of {expected_games} games finished after "
+                f"{WINNERS_INCOMPLETE_GRACE_HOURS}h. Verify with `!show_winners "
+                f"{week_num}` and correct with `!set_winners` if needed."
+            )
+
         if not winners:
             logger.warning(f"No winners returned by ESPN for week {week_num}")
             return None
 
         await db.set_winners(season, week_num, winners)
-        logger.info(f"✅ Stored winners for week {week_num}: {winners}")
+        if complete:
+            # Only a fully finished week is banked as final; anything else stays
+            # eligible for re-fetch on the next pass.
+            await db.mark_winners_fetched(season, week_num)
+            logger.info(f"✅ Stored complete winners for week {week_num}: {winners}")
+        else:
+            logger.warning(f"Stored INCOMPLETE winners for week {week_num}: {winners}")
         return winners
 
     # -- Admin commands --------------------------------------------------------

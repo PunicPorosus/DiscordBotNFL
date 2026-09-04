@@ -9,7 +9,7 @@ class Results(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # _compute_scores removed — all scoring logic lives in utils/scoring.py
+    # _compute_scores removed, all scoring logic lives in utils/scoring.py
 
     # -- Commands --------------------------------------------------------------
 

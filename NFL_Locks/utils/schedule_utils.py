@@ -6,7 +6,7 @@ Uses schedule metadata as single source of truth.
 
 from datetime import datetime, timedelta
 from NFL_Locks.utils.data_utils import load_full_schedule, get_schedule_metadata
-from NFL_Locks.utils.config import DEFAULT_MAX_WEEK
+from NFL_Locks.utils.config import DEFAULT_MAX_WEEK, WEEK_BOUNDARY_HOUR
 from NFL_Locks.utils.constants import EASTERN
 
 # Cache metadata for performance (loaded once per bot session)
@@ -153,11 +153,60 @@ def refresh_metadata_cache():
 
 # -- Week detection -------------------------------------------------------------
 
+def get_week_window(week_games):
+    """Return (week_start, week_end) in Eastern for one week's game list.
+
+    A week opens at WEEK_BOUNDARY_HOUR on the Tuesday on or before that week's
+    earliest kickoff, and closes one minute before the next Tuesday's boundary.
+
+    The boundary is a fixed wall-clock time. The previous rule subtracted whole
+    days from the first kickoff, which preserved the kickoff's time of day: a
+    Thursday 8:15 PM opener produced a Tuesday 8:15 PM boundary. That put the
+    flip twelve hours after Tuesday's 8 AM results post, so for the whole of
+    Tuesday morning the "current week" was still the week that had just ended
+    and anything keyed off it (matchup catchup above all) could not act on the
+    new week until that evening.
+
+    Returns (None, None) if the week has no usable kickoff timestamps.
+    """
+    if not week_games:
+        return None, None
+
+    kickoffs = []
+    for game in week_games:
+        raw = game.get("date")
+        if not raw:
+            continue
+        try:
+            kickoffs.append(
+                datetime.fromisoformat(raw.replace('Z', '+00:00')).astimezone(EASTERN)
+            )
+        except (ValueError, TypeError):
+            continue
+
+    if not kickoffs:
+        return None, None
+
+    # min(), not week_games[0]: get_week_deadline already scans for the earliest
+    # kickoff, and the two must agree on which game opens the week. Relying on
+    # list order made them disagree the moment ESPN returned games out of order.
+    first_game = min(kickoffs)
+
+    week_start = first_game.replace(
+        hour=WEEK_BOUNDARY_HOUR, minute=0, second=0, microsecond=0
+    )
+    week_start -= timedelta(days=(week_start.weekday() - 1) % 7)
+    if week_start > first_game:
+        week_start -= timedelta(days=7)
+
+    return week_start, week_start + timedelta(days=6, hours=23, minutes=59)
+
+
 def get_current_week_info(now=None):
     """
     Determine the current NFL week and whether the bot is in-season.
 
-    Single source of truth — previously duplicated across Winners and
+    Single source of truth, previously duplicated across Winners and
     GamesManager cogs (with the GamesManager copy missing the grace period).
 
     Args:
@@ -165,9 +214,9 @@ def get_current_week_info(now=None):
 
     Returns:
         (current_week, previous_week, in_nfl_season)
-            current_week  — int or None  (the week whose window contains now)
-            previous_week — int or None  (the most recently completed week)
-            in_nfl_season — bool         (True during season + grace period)
+            current_week, int or None  (the week whose window contains now)
+            previous_week, int or None  (the most recently completed week)
+            in_nfl_season, bool         (True during season + grace period)
     """
     from NFL_Locks.utils.data_utils import load_full_schedule
     from NFL_Locks.utils.config import SEASON_END_GRACE_DAYS
@@ -192,12 +241,9 @@ def get_current_week_info(now=None):
         if not week_games:
             continue
 
-        first_game_utc = datetime.fromisoformat(week_games[0]["date"].replace('Z', '+00:00'))
-        first_game = first_game_utc.astimezone(EASTERN)
-
-        days_since_tuesday = (first_game.weekday() - 1) % 7
-        week_start = first_game - timedelta(days=days_since_tuesday)
-        week_end = week_start + timedelta(days=6, hours=23, minutes=59)
+        week_start, week_end = get_week_window(week_games)
+        if week_start is None:
+            continue
 
         if wk == max_week:
             last_week_end = week_end
@@ -275,8 +321,9 @@ def find_current_week(
 ) -> int | None:
     """Return the current NFL week number, or None if not in an active week.
 
-    A week spans from the Tuesday before its first game through the following
-    Monday at 23:59 ET.  Weeks that have no games in the schedule are skipped.
+    A week runs from WEEK_BOUNDARY_HOUR on the Tuesday before its first game
+    through one minute before the following Tuesday's boundary. Weeks with no
+    games in the schedule are skipped.
 
     Args:
         schedule: Full schedule dict keyed by str week number (from load_full_schedule()).
@@ -291,13 +338,9 @@ def find_current_week(
         if not week_games:
             continue
 
-        first_game_utc = datetime.fromisoformat(
-            week_games[0]["date"].replace('Z', '+00:00')
-        )
-        first_game = first_game_utc.astimezone(EASTERN)
-        days_since_tuesday = (first_game.weekday() - 1) % 7
-        week_start = first_game - timedelta(days=days_since_tuesday)
-        week_end = week_start + timedelta(days=6, hours=23, minutes=59)
+        week_start, week_end = get_week_window(week_games)
+        if week_start is None:
+            continue
 
         if week_start <= now <= week_end:
             return wk
