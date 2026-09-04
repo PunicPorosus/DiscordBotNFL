@@ -654,24 +654,6 @@ class NFLLocksDB:
             result.setdefault(row["channel_id"], []).append(int(row["message_id"]))
         return result
 
-    async def get_all_picks_for_week(
-        self, season: int, week: int
-    ) -> dict[str, list[str]]:
-        """
-        All picks for a week across ALL guilds combined.
-        Returns {team: [user_name, ...]}.
-        Used for global standings where guild boundaries are intentionally ignored.
-        """
-        async with self._conn.execute(
-            "SELECT team, user_name FROM picks WHERE season=? AND week=?",
-            (season, week),
-        ) as cur:
-            rows = await cur.fetchall()
-        result: dict[str, list[str]] = {}
-        for row in rows:
-            result.setdefault(row["team"], []).append(row["user_name"])
-        return result
-
     async def get_latest_week_with_winners(self, season: int) -> int | None:
         """
         Return the highest week number that has winners recorded, or None.

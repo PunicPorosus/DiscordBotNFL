@@ -76,7 +76,6 @@ class Help(commands.Cog):
                 value=(
                     "`!weekly_results <week>`: Post weekly results for THIS SERVER\n"
                     "`!season_standings [week]`: Show season standings for THIS SERVER\n"
-                    "`!global_standings [week]`: Show combined standings from ALL SERVERS\n"
                     "`!post_wrapup`: Post end-of-season statistics (admin)\n"
                     "`!check_reactions <week>`: View current picks for THIS SERVER\n"
                     "`!mypoints`: Your own points with a weekly breakdown\n"

@@ -1,7 +1,7 @@
 from discord.ext import commands
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season
-from NFL_Locks.utils.command_names import CMD_SET_WINNERS, CMD_TALLY_SCORES, CMD_WEEKLY_RESULTS, CMD_SEASON_STANDINGS, CMD_GLOBAL_STANDINGS, CMD_CHECK_REACTIONS
+from NFL_Locks.utils.command_names import CMD_SET_WINNERS, CMD_TALLY_SCORES, CMD_WEEKLY_RESULTS, CMD_SEASON_STANDINGS, CMD_CHECK_REACTIONS
 from NFL_Locks.utils.command_utils import off_season_reply
 from NFL_Locks.utils import scoring as scoring_mod
 
@@ -128,48 +128,15 @@ class Results(commands.Cog):
             return
         await self.post_season_standings_to_channel(ctx.channel, through_week)
 
-    @commands.command(name=CMD_GLOBAL_STANDINGS)
-    @commands.has_permissions(administrator=True)
-    async def global_standings(self, ctx, through_week: int = None):
-        """Show combined standings from ALL SERVERS."""
-        if await off_season_reply(ctx):
-            return
-        season = get_current_season()
-        db = get_db()
-
-        if through_week is None:
-            through_week = await db.get_latest_week_with_winners(season)
-
-        if not through_week:
-            await ctx.send("❌ No completed weeks found.")
-            return
-
-        # Global standings merges picks across guilds that may have different schemes.
-        # All-or-nothing is used as a consistent baseline for cross-guild comparison.
-        season_scores: dict[str, int] = {}
-
-        for wk in range(1, through_week + 1):
-            winners = await db.get_winners(season, wk)
-            if not winners:
-                continue
-            picks = await db.get_all_picks_for_week(season, wk)
-            week_scores = scoring_mod.compute_week_scores(
-                picks, set(winners), scoring_mod.SCHEME_ALL_OR_NOTHING
-            )
-            for user, pts in week_scores.items():
-                season_scores[user] = season_scores.get(user, 0) + pts
-
-        if season_scores:
-            sorted_standings = sorted(season_scores.items(), key=lambda x: x[1], reverse=True)
-            standings = "\n".join(
-                f"**{i+1}.** {u}: {pts} points"
-                for i, (u, pts) in enumerate(sorted_standings)
-            )
-            await ctx.send(
-                f"**GLOBAL Season Standings** (All Servers, Through Week {through_week}):\n{standings}"
-            )
-        else:
-            await ctx.send("No season data available yet.")
+    # !global_standings was removed here.
+    # It merged picks across every configured guild by grouping on user_name
+    # rather than user_id, so one person in two servers collapsed into a single
+    # bucket (a wrong pick in one server wiped a perfect week in the other), and
+    # two people sharing a display name became one entry. It also hardcoded
+    # all-or-nothing regardless of either guild's configured scheme, so it
+    # disagreed with every other standings surface by construction.
+    # A rebuild should group on user_id and decide explicitly what a combined
+    # table means when guilds run different schemes.
 
     @commands.command(name=CMD_CHECK_REACTIONS)
     @commands.has_permissions(administrator=True)

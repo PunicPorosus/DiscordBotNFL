@@ -48,7 +48,6 @@ CMD_SET_WINNERS             = "set_winners"
 CMD_TALLY_SCORES            = "tally_scores"
 CMD_WEEKLY_RESULTS          = "weekly_results"
 CMD_SEASON_STANDINGS        = "season_standings"
-CMD_GLOBAL_STANDINGS        = "global_standings"
 CMD_CHECK_REACTIONS         = "check_reactions"
 
 # -- results_manager.py --------------------------------------------------------
