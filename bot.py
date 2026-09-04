@@ -209,21 +209,34 @@ async def main():
     logger.info("Database connected")
 
     try:
-        for ext in initial_extensions:
-            try:
-                await bot.load_extension(ext)
-                logger.info(f"✅ Loaded {ext}")
-            except Exception as e:
-                logger.error(f"❌ Failed to load {ext}: {e}", exc_info=True)
-                bot._failed_extensions.append(f"{ext}: {e}")
+        # `async with bot` runs discord.py's _async_setup_hook() BEFORE anything
+        # else, which is what creates the client's internal _ready event.
+        #
+        # Extensions must not load before that. A cog whose __init__ calls
+        # tasks_loop.start() schedules its before_loop immediately, and a
+        # before_loop that awaits bot.wait_until_ready() on a client with no
+        # _ready yet raises RuntimeError("Client has not been properly
+        # initialised"), which kills that loop before its first iteration.
+        # Loading extensions ahead of bot.start() silently killed every loop
+        # with a wait_until_ready guard: the heartbeat, the lock-time check,
+        # the matchup catchup and the annual schedule update. Only the two
+        # loops without a before_loop ever ran.
+        async with bot:
+            for ext in initial_extensions:
+                try:
+                    await bot.load_extension(ext)
+                    logger.info(f"✅ Loaded {ext}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to load {ext}: {e}", exc_info=True)
+                    bot._failed_extensions.append(f"{ext}: {e}")
 
-        if bot._failed_extensions:
-            logger.warning(
-                f"Extensions that failed to load: "
-                f"{', '.join(bot._failed_extensions)}"
-            )
+            if bot._failed_extensions:
+                logger.warning(
+                    f"Extensions that failed to load: "
+                    f"{', '.join(bot._failed_extensions)}"
+                )
 
-        await bot.start(TOKEN)
+            await bot.start(TOKEN)
     finally:
         # Runs on clean shutdown, KeyboardInterrupt, or unhandled exception.
         await db.close()
