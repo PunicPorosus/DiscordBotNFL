@@ -153,16 +153,18 @@ class GamesManager(commands.Cog):
             channel_id = str(channel.id)
             new_count = 0
 
+            reaction_failures = 0
+
             for game in matchups:
                 try:
                     away, home = game["away"], game["home"]
                     message = await rate_limiter.send(channel, f"{away} @ {home}")
 
-                    if away in NFL_TEAMS:
-                        await message.add_reaction(NFL_TEAMS[away])
-                    if home in NFL_TEAMS:
-                        await message.add_reaction(NFL_TEAMS[home])
-
+                    # Record the message BEFORE reacting. Reactions used to come
+                    # first, so a single add_reaction failure skipped
+                    # add_tracked_message entirely: the matchup was posted but never
+                    # recorded, catchup_games then saw the guild as still needing
+                    # games, and it reposted the whole week every hour indefinitely.
                     await db.add_tracked_message(
                         message_id=message.id,
                         guild_id=guild_id,
@@ -174,12 +176,40 @@ class GamesManager(commands.Cog):
                     )
                     if cache_cog:
                         cache_cog.add_to_cache(message.id, week_number)
-
                     new_count += 1
+
+                    # Reactions are best effort. A missing emoji or a permission
+                    # problem must never cost us the tracking record above.
+                    for team in (away, home):
+                        if team not in NFL_TEAMS:
+                            continue
+                        try:
+                            await message.add_reaction(NFL_TEAMS[team])
+                        except Exception as e:
+                            reaction_failures += 1
+                            logger.error(
+                                f"Could not add {team} reaction to message "
+                                f"{message.id} in #{channel.name}: {e!r}"
+                            )
                 except Exception as e:
                     logger.error(f"Error posting matchup {game}: {e}")
 
             logger.info(f"Tracked {new_count} new messages for week {week_number}")
+
+            if reaction_failures:
+                logger.error(
+                    f"{reaction_failures} reaction(s) failed in #{channel.name}; "
+                    f"nobody can pick on a matchup with no team emojis"
+                )
+                from BotUtils.notify import notify_admin
+                await notify_admin(
+                    self.bot,
+                    f"**Week {week_number} posted to #{channel.name}, but "
+                    f"{reaction_failures} reactions failed.** Matchups are tracked, so "
+                    f"this will not repost on a loop, but users cannot pick until the "
+                    f"emojis are fixed. Check the bot's Add Reactions and Use External "
+                    f"Emoji permissions in that server."
+                )
 
             # -- Footer --------------------------------------------------------
             if deadline_str:

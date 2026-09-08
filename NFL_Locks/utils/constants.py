@@ -1,39 +1,49 @@
 from BotUtils.time import EASTERN  # noqa: F401, re-exported for existing cog imports
 from BotUtils.constants import OWNER_ID  # noqa: F401, re-exported for existing cog imports
 
+# Team reaction emoji: APPLICATION emoji owned by the bot, not guild emoji.
+#
+# These are listed under Emojis in the Discord Developer Portal, not in any
+# server's emoji list, so they do not appear in discord.py's bot.emojis and
+# they work in every guild the app is installed to without Use External Emoji.
+#
+# The previous IDs here (1438...) were stale: every add_reaction returned
+# "400 Bad Request (10014): Unknown Emoji", so no matchup could be picked and
+# the hourly catchup reposted the week forever. Re-check these against the
+# portal if reactions ever stop appearing.
 NFL_TEAMS = {
-    "ARI": "<:Cardinals:1438626449631346839>",
-    "ATL": "<:Falcons:1438626450453299311>",
-    "BAL": "<:Ravens:1438626451166597263>",
-    "BUF": "<:Bills:1438626451711725670>",
-    "CAR": "<:Panthers:1438626452705906850>",
-    "CHI": "<:Bears:1438626453762605087>",
-    "CIN": "<:Bengals:1438626454656123125>",
-    "CLE": "<:Browns:1438626455582937159>",
-    "DAL": "<:Cowboys:1438626456916852989>",
-    "DEN": "<:Broncos:1438626457768427702>",
-    "DET": "<:Lions:1438626459735560293>",
-    "GB": "<:Packers:1438626460461174925>",
-    "HOU": "<:Texans:1438626461228466306>",
-    "IND": "<:Colts:1438626462327505029>",
-    "JAX": "<:Jaguars:1438626463770480661>",
-    "KC": "<:Chiefs:1438626464797819002>",
-    "LV": "<:Raiders:1438626467876569212>",
-    "LAC": "<:Chargers:1438626466408431777>",
-    "LAR": "<:Rams:1438626467344027709>",
-    "MIA": "<:Dolphins:1438626469554294794>",
-    "MIN": "<:Vikings:1438626470611390514>",
-    "NE": "<:Patriots:1438626471949107327>",
-    "NO": "<:Saints:1438626473266249738>",
-    "NYG": "<:Giants:1438626474197516449>",
-    "NYJ": "<:Jets:1438626475459739689>",
-    "PHI": "<:Eagles:1438626476655251516>",
-    "PIT": "<:Steelers:1438626477821268019>",
-    "SEA": "<:Seahawks:1438626479050067968>",
-    "SF": "<:49ers:1438626480383987742>",
-    "TB": "<:Buccaneers:1438626481353003049>",
-    "TEN": "<:Titans:1438626482279944382>",
-    "WSH": "<:Commanders:1438626483051692155>"
+    "ARI": "<:cardinals:1413172503534239917>",
+    "ATL": "<:falcons:1413172385913245749>",
+    "BAL": "<:ravens:1413172539240349859>",
+    "BUF": "<:bills:1413172397569216582>",
+    "CAR": "<:panthers:1413172338014556230>",
+    "CHI": "<:bears:1413172415457918996>",
+    "CIN": "<:bengals:1413172767238393987>",
+    "CLE": "<:browns:1413172435015962684>",
+    "DAL": "<:cowboys:1413172876529373204>",
+    "DEN": "<:broncos:1413172361514979338>",
+    "DET": "<:lions:1413172695415128165>",
+    "GB": "<:packers:1413172714239168682>",
+    "HOU": "<:texans:1413172459393388748>",
+    "IND": "<:colts:1413174176985907260>",
+    "JAX": "<:jaguars:1413172373355630612>",
+    "KC": "<:chiefs:1413172736796135445>",
+    "LV": "<:raiders:1413172349691232296>",
+    "LAC": "<:chargers:1413172704814694430>",
+    "LAR": "<:rams:1413172847026765894>",
+    "MIA": "<:dolphins:1413172635021344858>",
+    "MIN": "<:vikings:1413172448555175956>",
+    "NE": "<:patriots:1413172568067670097>",
+    "NO": "<:saints:1413172863145476137>",
+    "NYG": "<:giants:1413172481576931348>",
+    "NYJ": "<:jets:1413172470705295420>",
+    "PHI": "<:eagles:1413172669758570566>",
+    "PIT": "<:steelers:1413172647566508062>",
+    "SEA": "<:seahawks:1413174223161004034>",
+    "SF": "<:49ers:1413172524585455676>",
+    "TB": "<:buccaneers:1413172292141187102>",
+    "TEN": "<:titans:1413172723928137829>",
+    "WSH": "<:commanders:1413172328128446474>",
 }
 
 # Pre-built O(1) reverse lookup tables, built once at import time.
