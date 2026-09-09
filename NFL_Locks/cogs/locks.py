@@ -61,6 +61,19 @@ class Locks(commands.Cog):
                 logger.info(f"Deadline reached for Week {wk}, posting lock summaries")
                 await self.lock_reactions_for_week(wk)
 
+                # Survivor runs in its own channels with its own pick set, so it
+                # needs its own summary off the same trigger. Wrapped so a
+                # survivor failure cannot take the locks summary down with it.
+                survivor_cog = self.bot.get_cog("SurvivorGame")
+                if survivor_cog:
+                    try:
+                        await survivor_cog.post_lock_summary(wk)
+                    except Exception as e:
+                        logger.error(
+                            f"Survivor lock summary failed for Week {wk}: {e}",
+                            exc_info=True,
+                        )
+
     @check_lock_times.before_loop
     async def _before_check_lock_times(self):
         """The loop must not fire before the bot has guilds and channels."""

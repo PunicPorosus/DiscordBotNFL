@@ -37,6 +37,7 @@ from NFL_Locks.utils.command_names import (
     CMD_SURVIVOR_SETUP,
     CMD_SURVIVOR_START,
     CMD_SURVIVOR_STANDINGS,
+    CMD_SURVIVOR_ALLPICKS,
     CMD_SURVIVOR_MYPICKS,
     CMD_SURVIVOR_FIX_PICK,
     CMD_SURVIVOR_ELIMINATE,
@@ -463,7 +464,7 @@ class SurvivorGame(commands.Cog):
                     except Exception:
                         continue
         except Exception as e:
-            logger.debug(f"[SURVIVOR] Could not remove old reaction for {team}: {e}")
+            logger.warning(f"[SURVIVOR] Could not remove old reaction for {team}: {e!r}")
 
     # -- Reconciliation buffer helpers (mirrors reactions.py) -----------------
 
@@ -847,6 +848,136 @@ class SurvivorGame(commands.Cog):
 
         return guild_results
 
+    async def _build_lock_summary(self, db, season: int, week_number: int, guild_id: str):
+        """Build one guild's lock-summary lines. Returns None if nobody is alive.
+
+        Scoped to a single guild on purpose: every read here is filtered by
+        guild_id, so a server only ever sees its own players and picks. Shared by
+        the automatic deadline post and the !survivor_allpicks command so the two
+        can never drift apart.
+        """
+        alive = await db.get_alive_survivor_players(season, guild_id)
+        if not alive:
+            return None
+
+        picks = {
+            p["user_id"]: p
+            for p in await db.get_survivor_picks_for_week(season, week_number, guild_id)
+        }
+
+        picked, missing = [], []
+        for player in alive:
+            pick = picks.get(player["user_id"])
+            if pick:
+                picked.append((player["user_name"], pick["team"], player["correct_streak"]))
+            else:
+                missing.append(player["user_name"])
+
+        return alive, picked, missing
+
+    def _format_lock_summary(self, week_number: int, alive, picked, missing, locked: bool):
+        """Render the summary. `locked` switches the header and the missing-pick
+        wording between 'picks are final' and 'there is still time'."""
+        header = "LOCKED" if locked else "current standings"
+        lines = [f"**Week {week_number} Survivor Picks: {header}**\n"]
+
+        if picked:
+            lines.append(f"__Picks recorded ({len(picked)})__")
+            for name, team, streak in sorted(picked, key=lambda x: x[0].lower()):
+                emoji = NFL_TEAMS.get(team, "")
+                streak_str = f"  (streak {streak})" if streak else ""
+                lines.append(f"{emoji} **{name}**: {team}{streak_str}")
+
+        if missing:
+            lines.append(f"\n__NO PICK RECORDED ({len(missing)})__")
+            lines.append(
+                "Eliminated when results post unless an admin corrects it:"
+                if locked else
+                "These players still need to pick before kickoff:"
+            )
+            for name in sorted(missing, key=str.lower):
+                lines.append(f"**{name}**")
+
+        lines.append(
+            f"\nAlive: {len(alive)}  |  Picked: {len(picked)}  |  Missed: {len(missing)}"
+        )
+        return lines
+
+    async def post_lock_summary(self, week_number: int) -> None:
+        """Post each guild's own recorded picks when the week locks.
+
+        Survivor never had an equivalent of the locks cog's lock summary, so the
+        only way a player could confirm what the bot recorded was
+        !survivor_mypicks on themselves.
+
+        The no-pick list is the point of this. A survivor pick is a season-long
+        resource and a missed week is an elimination, so anyone still alive
+        without a pick needs to see their own name while the deadline is landing,
+        not discover it in Tuesday's results.
+
+        One post per guild, containing only that guild's players, sent to that
+        guild's own survivor channel. Idempotent per (season, week, guild) via
+        survivor_locks_posted, because check_lock_times runs every 5 minutes
+        against a 300-second window and can fire twice.
+        """
+        db = get_db()
+        season = get_current_season()
+
+        for cfg in await db.get_all_survivor_configs():
+            # get_all_survivor_configs() already filters WHERE active=1
+            if cfg["season"] != season:
+                continue
+            if cfg["start_week"] > week_number:
+                continue
+
+            guild_id = str(cfg["guild_id"])
+            if await db.is_survivor_locks_posted(season, week_number, guild_id):
+                continue
+
+            channel = self.bot.get_channel(cfg["channel_id"])
+            if not channel:
+                logger.warning(
+                    f"[SURVIVOR] Channel {cfg['channel_id']} not reachable for guild "
+                    f"{guild_id}, cannot post Week {week_number} lock summary"
+                )
+                continue
+
+            built = await self._build_lock_summary(db, season, week_number, guild_id)
+            if not built:
+                logger.info(
+                    f"[SURVIVOR] No alive players in guild {guild_id}, "
+                    f"skipping Week {week_number} lock summary"
+                )
+                continue
+
+            alive, picked, missing = built
+            await self._send_chunked(
+                channel, self._format_lock_summary(week_number, alive, picked, missing, locked=True)
+            )
+            await db.mark_survivor_locks_posted(season, week_number, guild_id)
+            logger.info(
+                f"[SURVIVOR] Week {week_number} lock summary posted to guild {guild_id} "
+                f"({len(picked)} picked, {len(missing)} missed)"
+            )
+
+    async def _send_chunked(self, channel, lines: "list[str]") -> None:
+        """Send lines to a channel, splitting on Discord's 2000-character limit."""
+        message = "\n".join(lines)
+        if len(message) <= 2000:
+            await channel.send(message)
+            return
+
+        await channel.send(lines[0])
+        chunk, chunk_len = [], 0
+        for line in lines[1:]:
+            if chunk_len + len(line) + 1 > 1900:
+                await channel.send("\n".join(chunk))
+                chunk, chunk_len = [], 0
+            chunk.append(line)
+            chunk_len += len(line) + 1
+        if chunk:
+            await channel.send("\n".join(chunk))
+
     async def post_survivor_results(
         self, channel: discord.TextChannel, week: int, results: "list[dict]"
     ) -> None:
@@ -985,22 +1116,52 @@ class SurvivorGame(commands.Cog):
         )
 
         channel_id_str = str(ctx.channel.id)
+        reaction_failures = 0
         for game in week_games:
-            away, home = game["away"], game["home"]
-            msg = await ctx.send(f"{away} @ {home}")
-            await msg.add_reaction(NFL_TEAMS[away])
-            await msg.add_reaction(NFL_TEAMS[home])
+            try:
+                away, home = game["away"], game["home"]
+                msg = await ctx.send(f"{away} @ {home}")
 
-            await db.add_survivor_message(
-                message_id=msg.id,
-                guild_id=guild_id,
-                channel_id=channel_id_str,
-                season=season,
-                week=week_num,
-                team_a=away,
-                team_b=home,
+                # Track the message BEFORE reacting, and never let a reaction
+                # failure abort the loop. Reactions came first here with no
+                # try/except at all, so one bad emoji skipped add_survivor_message
+                # and killed every remaining matchup. An untracked message makes
+                # _handle_reaction_add return early, so picks are silently not
+                # recorded and old reactions are never stripped.
+                await db.add_survivor_message(
+                    message_id=msg.id,
+                    guild_id=guild_id,
+                    channel_id=channel_id_str,
+                    season=season,
+                    week=week_num,
+                    team_a=away,
+                    team_b=home,
+                )
+                self._msg_cache[msg.id] = week_num
+
+                for team in (away, home):
+                    if team not in NFL_TEAMS:
+                        continue
+                    try:
+                        await msg.add_reaction(NFL_TEAMS[team])
+                    except Exception as e:
+                        reaction_failures += 1
+                        logger.error(
+                            f"[SURVIVOR] Could not add {team} reaction to "
+                            f"message {msg.id}: {e!r}"
+                        )
+            except Exception as e:
+                logger.error(f"[SURVIVOR] Error posting matchup {game}: {e}", exc_info=True)
+
+        if reaction_failures:
+            logger.error(
+                f"[SURVIVOR] {reaction_failures} reaction(s) failed for Week {week_num}; "
+                f"players cannot pick on a matchup with no team emojis"
             )
-            self._msg_cache[msg.id] = week_num
+            await ctx.send(
+                f"Warning: {reaction_failures} reaction(s) failed to post. "
+                f"Matchups are tracked, but players cannot pick until this is fixed."
+            )
 
         await ctx.send(f"Week {week_num} survivor matchups posted! Good luck.")
         logger.info(
@@ -1072,6 +1233,52 @@ class SurvivorGame(commands.Cog):
             f"Season: {config['season']}\n"
             f"Total enrolled: {len(all_players)}\n"
             f"Still alive: {len(alive)}"
+        )
+
+    @commands.command(name=CMD_SURVIVOR_ALLPICKS)
+    @commands.has_permissions(administrator=True)
+    async def survivor_allpicks(self, ctx, week_num: int = None):
+        """Post this server's survivor picks for a week, on demand (Admin only).
+
+        Usage: !survivor_allpicks [week]
+
+        Same content as the automatic lock summary, scoped to this server only,
+        posted wherever the command is run. Intended for the minutes before
+        kickoff when players want to confirm what the bot actually recorded.
+
+        Deliberately does NOT mark the week as summarised, so running it early
+        cannot suppress the automatic post at the deadline.
+        """
+        db = get_db()
+        season = get_current_season()
+        guild_id = str(ctx.guild.id)
+
+        config = await db.get_survivor_config(guild_id)
+        if not config:
+            await ctx.send("Survivor is not configured for this server.")
+            return
+
+        if week_num is None:
+            week_num = find_current_week(load_full_schedule(), datetime.now(EASTERN), get_max_week())
+            if week_num is None:
+                await ctx.send("Could not determine the current week. Pass a week number explicitly.")
+                return
+
+        if not (1 <= week_num <= get_max_week()):
+            await ctx.send(f"Week number must be between 1 and {get_max_week()}.")
+            return
+
+        built = await self._build_lock_summary(db, season, week_num, guild_id)
+        if not built:
+            await ctx.send(f"No players are still alive in Survivor for Week {week_num}.")
+            return
+
+        alive, picked, missing = built
+        await self._send_chunked(
+            ctx.channel,
+            self._format_lock_summary(
+                week_num, alive, picked, missing, locked=is_deadline_passed(week_num)
+            ),
         )
 
     @commands.command(name=CMD_SURVIVOR_STANDINGS)

@@ -243,12 +243,21 @@ class Reactions(commands.Cog):
         team_a, team_b = matchup
         opponent = team_b if team == team_a else team_a
 
-        prior_pick = await db.get_user_pick_for_matchup(
-            season, week_num, guild_id, user_id, team_a, team_b
-        )
-        # prior_pick will be `team` itself (just inserted) unless the opponent
-        # was already there, so only act when the conflict is the opponent.
-        if prior_pick != opponent:
+        # Ask directly whether the OPPONENT is picked, rather than asking which
+        # of the two teams is picked and then comparing.
+        #
+        # The pick above is already inserted, so a double-pick has two rows by
+        # now. The old call was
+        #   SELECT team FROM picks ... AND team IN (team_a, team_b)  -> fetchone()
+        # which SQLite satisfies from UNIQUE (season, week, guild_id, user_id,
+        # team), probing the IN list in the order given. That means it always
+        # returned team_a. When the reaction just made WAS team_a, the result was
+        # the pick we had only just written, the comparison below sent us home,
+        # and both picks survived: a guaranteed zero week under all-or-nothing.
+        #
+        # Deterministic, not racy: reacting to the away team second always
+        # defeated it, reacting to the home team second always worked.
+        if not await db.user_has_pick(season, week_num, guild_id, user_id, opponent):
             return
 
         # Remove the conflicting pick from the DB.

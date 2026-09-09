@@ -177,6 +177,7 @@ class Help(commands.Cog):
                 name="Player Commands",
                 value=(
                     "`!survivor_standings`: Show who's alive, eliminated, and winning streaks\n"
+                    "`!survivor_allpicks [week]`: Post this server's picks for a week (admin)\n"
                     "`!survivor_mypicks`: Show your pick history and teams used this season"
                 ),
                 inline=False,

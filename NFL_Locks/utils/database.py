@@ -165,6 +165,14 @@ CREATE TABLE IF NOT EXISTS survivor_messages (
 CREATE INDEX IF NOT EXISTS idx_survivor_messages_week
     ON survivor_messages (season, week, guild_id);
 
+CREATE TABLE IF NOT EXISTS survivor_locks_posted (
+    season      INTEGER NOT NULL,
+    week        INTEGER NOT NULL,
+    guild_id    TEXT    NOT NULL,
+    posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (season, week, guild_id)
+);
+
 CREATE TABLE IF NOT EXISTS survivor_results_posted (
     season      INTEGER NOT NULL,
     week        INTEGER NOT NULL,
@@ -556,29 +564,6 @@ class NFLLocksDB:
         if not row or not row["team_a"] or not row["team_b"]:
             return None
         return row["team_a"], row["team_b"]
-
-    async def get_user_pick_for_matchup(
-        self,
-        season: int,
-        week: int,
-        guild_id: int | str,
-        user_id: str,
-        team_a: str,
-        team_b: str,
-    ) -> str | None:
-        """Return which team (team_a or team_b) a user has already picked, or None.
-
-        Used to detect conflicting picks before writing a new one, so the
-        caller can remove the old pick first.
-        """
-        async with self._conn.execute(
-            """SELECT team FROM picks
-               WHERE season=? AND week=? AND guild_id=? AND user_id=?
-               AND team IN (?, ?)""",
-            (season, week, str(guild_id), user_id, team_a, team_b),
-        ) as cur:
-            row = await cur.fetchone()
-        return row["team"] if row else None
 
     async def get_matchup_map_for_week(
         self,
@@ -1447,6 +1432,27 @@ class NFLLocksDB:
         return row["correct_streak"] if row else 0
 
     # -- Survivor results posted -----------------------------------------------
+
+    async def mark_survivor_locks_posted(
+        self, season: int, week: int, guild_id: int | str
+    ) -> None:
+        """Record that this guild's survivor lock summary has been posted."""
+        await self._conn.execute(
+            """INSERT OR IGNORE INTO survivor_locks_posted (season, week, guild_id)
+               VALUES (?, ?, ?)""",
+            (season, week, str(guild_id)),
+        )
+        await self._conn.commit()
+
+    async def is_survivor_locks_posted(
+        self, season: int, week: int, guild_id: int | str
+    ) -> bool:
+        async with self._conn.execute(
+            """SELECT 1 FROM survivor_locks_posted
+               WHERE season=? AND week=? AND guild_id=?""",
+            (season, week, str(guild_id)),
+        ) as cur:
+            return await cur.fetchone() is not None
 
     async def mark_survivor_results_posted(
         self, season: int, week: int, guild_id: int | str
