@@ -49,13 +49,42 @@ class AutoTasks(commands.Cog):
         return latest_game_time + timedelta(hours=4)
 
     def _get_results_posting_time(self, week_num):
-        """Return 8 AM the morning after the last game of the week."""
-        week_end = self._get_week_end_time(week_num)
-        if not week_end:
+        """Return 8 AM the morning after the last game of the week.
+
+        Anchored on the last KICKOFF, not on _get_week_end_time(). That helper
+        adds a 4-hour play buffer, which pushes a Monday 8:15 PM kickoff to
+        12:15 AM Tuesday; adding a day to that landed on WEDNESDAY, so every
+        week's results posted a full day late. The buffer is for answering
+        "has the week finished", not for picking a calendar day.
+        """
+        last_kickoff = self._get_last_kickoff_time(week_num)
+        if not last_kickoff:
             return None
-        return (week_end + timedelta(days=1)).replace(
+        return (last_kickoff + timedelta(days=1)).replace(
             hour=8, minute=0, second=0, microsecond=0
         )
+
+    def _get_last_kickoff_time(self, week_num):
+        """Return the kickoff time of the week's final game, or None."""
+        schedule = load_full_schedule()
+        week_games = schedule.get(str(week_num))
+        if not week_games:
+            return None
+
+        latest = None
+        for game in week_games:
+            raw = game.get("date")
+            if not raw:
+                continue
+            try:
+                kickoff = datetime.fromisoformat(
+                    raw.replace('Z', '+00:00')
+                ).astimezone(EASTERN)
+            except (ValueError, TypeError):
+                continue
+            if latest is None or kickoff > latest:
+                latest = kickoff
+        return latest
 
     async def _find_week_to_post(self, now) -> tuple[int | None, bool]:
         """
@@ -63,7 +92,8 @@ class AutoTasks(commands.Cog):
 
         Checks weeks within the last 30 days. A week is ready when:
           - The posting time has passed (8 AM after last game), AND
-          - Results have not yet been posted to all configured guilds, AND
+          - The full weekly routine has not finished for every configured
+            guild, AND
           - We haven't already posted it this session.
 
         Returns (week_num, is_ready).
@@ -96,7 +126,16 @@ class AutoTasks(commands.Cog):
                 logger.debug(f"Already posted Week {week_num} this session, skipping")
                 continue
 
-            # Check DB: skip if all configured guilds already have results posted.
+            # Check DB: skip only when every configured guild has completed the
+            # FULL routine, not merely had its results message posted.
+            #
+            # This used to read is_results_posted, which catchup_results also
+            # writes from startup after posting the results message and nothing
+            # else. A restart between a week ending and this morning post
+            # therefore set the gate, and the leaderboard, survivor results and
+            # next week's matchups for that week were never posted at all: the
+            # week was skipped from then on, so there was no second chance.
+            #
             # Must use an explicit loop, await inside a generator expression
             # passed to all() is not valid and produces wrong results.
             if not configured_guilds:
@@ -104,12 +143,12 @@ class AutoTasks(commands.Cog):
             else:
                 all_posted = True
                 for gid in configured_guilds:
-                    if not await db.is_results_posted(season, week_num, str(gid)):
+                    if not await db.is_weekly_routine_posted(season, week_num, str(gid)):
                         all_posted = False
                         break
 
             if all_posted:
-                logger.debug(f"Week {week_num} results already posted to all guilds")
+                logger.debug(f"Week {week_num} routine already completed for all guilds")
                 continue
 
             logger.info(f"Week {week_num} ready to post (post_time={post_time}, now={now})")
@@ -123,7 +162,7 @@ class AutoTasks(commands.Cog):
     async def dynamic_weekly_tasks(self):
         """
         Check every hour whether any week is ready for results posting.
-        Only runs within the 7–10 AM posting window.
+        Only runs within the 7 to 10 AM posting window.
         """
         try:
             now = datetime.now(EASTERN)
@@ -148,6 +187,7 @@ class AutoTasks(commands.Cog):
 
             schedule = load_full_schedule()
             max_week = get_max_week()
+            season = get_current_season()
             next_week = week_to_post + 1 if week_to_post < max_week else None
 
             configured_guilds = await get_db().get_all_configured_guilds()
@@ -167,6 +207,20 @@ class AutoTasks(commands.Cog):
             survivor_guild_results = await self._process_survivor_results(week_to_post)
 
             for channel in configured_channels:
+                # Skip guilds that already finished this week. The results and
+                # survivor posts are individually idempotent, but the season
+                # leaderboard is not, so without this an exception partway
+                # through the guild list would re-post the leaderboard to every
+                # guild that had already succeeded when the next hour retried.
+                if await get_db().is_weekly_routine_posted(
+                    season, week_to_post, str(channel.guild.id)
+                ):
+                    logger.debug(
+                        f"Week {week_to_post} already completed for "
+                        f"{channel.guild.name}, skipping"
+                    )
+                    continue
+
                 logger.info(f"Processing {channel.guild.name}...")
 
                 logger.info(f"Posting Perfect Picks for Week {week_to_post}...")
@@ -178,10 +232,7 @@ class AutoTasks(commands.Cog):
                 await asyncio.sleep(2)
 
                 if next_week and next_week <= max_week:
-                    logger.info(f"Posting Week {next_week} Matchups...")
-                    week_games = schedule.get(str(next_week))
-                    if week_games:
-                        await self._post_games(channel, next_week, week_games)
+                    await self._post_games_if_missing(channel, next_week, schedule)
                     await asyncio.sleep(2)
                 else:
                     logger.info("End of season detected, posting season wrap-up...")
@@ -194,6 +245,12 @@ class AutoTasks(commands.Cog):
                 )
                 await asyncio.sleep(2)
 
+                # Mark the routine complete only after every step above has run
+                # for this guild, so a partial pass is retried rather than
+                # silently skipped forever.
+                await get_db().mark_weekly_routine_posted(
+                    season, week_to_post, str(channel.guild.id)
+                )
                 logger.info(f"Completed posting for {channel.guild.name}")
 
             self.last_posted_week = week_to_post
@@ -223,6 +280,44 @@ class AutoTasks(commands.Cog):
         games_cog = self.bot.get_cog('GamesManager')
         if games_cog:
             await games_cog.post_games_to_channel(channel, week_num, week_games)
+
+    async def _post_games_if_missing(self, channel, week_num, schedule):
+        """Post week_num's matchups only if this guild has none tracked yet.
+
+        post_games_to_channel is idempotent by REPLACEMENT: it deletes every
+        tracked message for the week and posts fresh ones. That was safe when
+        this routine was the only thing that posted week N+1.
+
+        It no longer is. GamesManager.catchup_games_loop runs hourly and posts
+        the current week's matchups as soon as the week boundary flips, which
+        happens early Tuesday, a full day before this routine runs. Calling
+        post_games_to_channel here then deleted messages players had already
+        been reacting to since Tuesday morning. Their picks survived in the DB
+        for a few minutes, until the next reconciliation compared the fresh,
+        reaction-less messages against the DB and removed every pick that
+        Discord no longer showed.
+
+        So: post only when the guild genuinely has nothing for this week.
+        """
+        season = get_current_season()
+        guild_id = str(channel.guild.id)
+
+        existing = await get_db().get_messages_for_week(season, week_num, guild_id)
+        if existing:
+            tracked = sum(len(mids) for mids in existing.values())
+            logger.info(
+                f"Week {week_num} matchups already posted to {channel.guild.name} "
+                f"({tracked} tracked message(s)), leaving them and their reactions alone"
+            )
+            return
+
+        week_games = schedule.get(str(week_num))
+        if not week_games:
+            logger.warning(f"No games found for Week {week_num}, nothing to post")
+            return
+
+        logger.info(f"Posting Week {week_num} Matchups to {channel.guild.name}...")
+        await self._post_games(channel, week_num, week_games)
 
     async def _post_season_wrapup(self, channel):
         wrapup_cog = self.bot.get_cog('SeasonWrapup')

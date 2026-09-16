@@ -90,12 +90,9 @@ class ReactionCatchup(commands.Cog):
                 if channel:
                     try:
                         await channel.send(
-                            f"**Final Sync Notice** \n\n"
-                            f"Picks are being synced for Week {current_week}.\n"
-                            f"**Deadline:** {deadline.strftime('%A at %I:%M %p ET')}\n\n"
-                            f"After this sync completes (~30 seconds), "
-                            f"your picks will be **LOCKED** and no further changes will be tracked.\n\n"
-                            f"Make your final adjustments NOW!"
+                            f"**Final call for selections!**\n\n"
+                            f"Locks choices will be locking at kickoff. "
+                            f"Player's recorded selections will be posted shortly thereafter."
                         )
                     except Exception as e:
                         logger.error(f"Error announcing in guild {guild_id}: {e}")
@@ -109,10 +106,9 @@ class ReactionCatchup(commands.Cog):
                     if s_channel:
                         try:
                             await s_channel.send(
-                                f"**Survivor Final Sync Notice**\n\n"
-                                f"Survivor picks are being synced for Week {current_week}.\n"
-                                f"**Deadline:** {deadline.strftime('%A at %I:%M %p ET')}\n\n"
-                                f"Make your final pick NOW, changes will be **LOCKED** in ~30 seconds."
+                                f"**Final call for selections!**\n\n"
+                                f"Survivor choices will be locking at kickoff. "
+                                f"Player's recorded selections will be posted shortly thereafter."
                             )
                         except Exception as e:
                             logger.error(
@@ -136,35 +132,11 @@ class ReactionCatchup(commands.Cog):
                 )
             self.last_catchup_time[current_week] = datetime.now(EASTERN)
 
-            # Announce completion, locks channels
-            for guild_id, channel_id in configured_guilds.items():
-                channel = self.bot.get_channel(channel_id)
-                if channel:
-                    try:
-                        await channel.send(
-                            f"✅ **Sync Complete!**\n\n"
-                            f"Week {current_week} picks are now **LOCKED**.\n"
-                            f"No further changes will be tracked until results are posted on Tuesday."
-                        )
-                    except Exception as e:
-                        logger.error(f"Error announcing completion in guild {guild_id}: {e}")
-
-            # Announce completion, survivor channels
-            if survivor_cog:
-                for scfg in survivor_configs:
-                    s_channel = self.bot.get_channel(scfg["channel_id"])
-                    if s_channel:
-                        try:
-                            await s_channel.send(
-                                f"✅ **Survivor Sync Complete!**\n\n"
-                                f"Week {current_week} Survivor picks are now **LOCKED**.\n"
-                                f"Results will be posted after games conclude."
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Error announcing survivor completion in channel "
-                                f"{scfg['channel_id']}: {e}"
-                            )
+            # The two "Sync Complete" announcements were removed here.
+            # They claimed the sync finished in ~30 seconds when it routinely took
+            # minutes, and they doubled the message count for no new information:
+            # the pre-deadline notice already tells players picks lock at kickoff,
+            # and the lock summary posts the recorded selections right after.
 
             logger.info(f"[PRE-DEADLINE SYNC] Complete for Week {current_week}: reactions now locked")
 

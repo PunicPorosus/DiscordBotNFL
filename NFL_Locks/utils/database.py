@@ -67,6 +67,18 @@ CREATE TABLE IF NOT EXISTS results_posted (
     PRIMARY KEY (season, week, guild_id)
 );
 
+-- Set only when a guild's FULL weekly routine has finished (results,
+-- leaderboard, next week's matchups, survivor results). results_posted covers
+-- the results message alone and is also written by catchup_results, so it
+-- cannot serve as the gate for the whole routine.
+CREATE TABLE IF NOT EXISTS weekly_routine_posted (
+    season      INTEGER NOT NULL,
+    week        INTEGER NOT NULL,
+    guild_id    TEXT    NOT NULL,
+    posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (season, week, guild_id)
+);
+
 CREATE TABLE IF NOT EXISTS tracked_messages (
     message_id  TEXT    PRIMARY KEY,
     guild_id    TEXT    NOT NULL,
@@ -518,6 +530,41 @@ class NFLLocksDB:
     ) -> bool:
         async with self._conn.execute(
             "SELECT 1 FROM results_posted WHERE season=? AND week=? AND guild_id=?",
+            (season, week, str(guild_id)),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    # -- Weekly routine completion --------------------------------------------
+    #
+    # Deliberately separate from results_posted. results_posted means "the Week N
+    # results message reached this guild", and catchup_results sets it on its own
+    # from startup, having posted nothing else.
+    #
+    # dynamic_weekly_tasks used to read that same flag to decide whether a week
+    # still needed its full routine. Any restart between a week ending and the
+    # morning post therefore cancelled that week's season leaderboard, survivor
+    # results and next-week matchups permanently: the flag was set, so the
+    # routine never looked at the week again.
+    #
+    # This flag is written only at the END of a guild's full routine, so the
+    # cheap catchup path can no longer consume the expensive one's gate.
+
+    async def mark_weekly_routine_posted(
+        self, season: int, week: int, guild_id: int | str
+    ):
+        await self._conn.execute(
+            """INSERT OR IGNORE INTO weekly_routine_posted (season, week, guild_id)
+               VALUES (?, ?, ?)""",
+            (season, week, str(guild_id)),
+        )
+        await self._conn.commit()
+
+    async def is_weekly_routine_posted(
+        self, season: int, week: int, guild_id: int | str
+    ) -> bool:
+        async with self._conn.execute(
+            """SELECT 1 FROM weekly_routine_posted
+               WHERE season=? AND week=? AND guild_id=?""",
             (season, week, str(guild_id)),
         ) as cur:
             return await cur.fetchone() is not None

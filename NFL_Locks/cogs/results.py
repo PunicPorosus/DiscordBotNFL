@@ -1,6 +1,12 @@
 from discord.ext import commands
 from NFL_Locks.utils.database import get_db
-from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season
+from NFL_Locks.utils.schedule_utils import (
+    get_max_week, get_current_season, find_current_week,
+)
+from NFL_Locks.utils.data_utils import load_full_schedule
+from NFL_Locks.utils.constants import EASTERN
+from NFL_Locks.utils.pick_format import format_picks_by_player, send_chunked
+from datetime import datetime
 from NFL_Locks.utils.command_names import CMD_SET_WINNERS, CMD_TALLY_SCORES, CMD_WEEKLY_RESULTS, CMD_SEASON_STANDINGS, CMD_CHECK_REACTIONS
 from NFL_Locks.utils.command_utils import off_season_reply
 from NFL_Locks.utils import scoring as scoring_mod
@@ -140,28 +146,44 @@ class Results(commands.Cog):
 
     @commands.command(name=CMD_CHECK_REACTIONS)
     @commands.has_permissions(administrator=True)
-    async def check_reactions(self, ctx, week_number: int):
-        """Show current picks for THIS SERVER."""
+    async def check_reactions(self, ctx, week_number: int = None):
+        """Show current picks for THIS SERVER, grouped by player.
+
+        Usage: !check_reactions [week]
+
+        Defaults to the current week. Formatted the same way as the automatic
+        lock summary (shared via utils/pick_format) so the on-demand view and
+        the posted one never disagree.
+        """
         season = get_current_season()
         db = get_db()
         guild_id = str(ctx.guild.id)
 
-        picks = await db.get_picks_for_week(season, week_number, guild_id)
-
-        lines = [
-            f"**{team}**: {', '.join(users)}"
-            for team, users in sorted(picks.items())
-            if users
-        ]
-
-        if lines:
-            await ctx.send(
-                f"**Week {week_number} Picks ({ctx.guild.name}):**\n" + "\n".join(lines)
+        if week_number is None:
+            week_number = find_current_week(
+                load_full_schedule(), datetime.now(EASTERN), get_max_week()
             )
-        else:
+            if week_number is None:
+                await ctx.send(
+                    "Could not determine the current week. Pass a week number explicitly."
+                )
+                return
+
+        if not (1 <= week_number <= get_max_week()):
+            await ctx.send(f"Week number must be between 1 and {get_max_week()}.")
+            return
+
+        picks = await db.get_picks_for_week(season, week_number, guild_id)
+        if not picks:
             await ctx.send(
                 f"No picks recorded yet for Week {week_number} in this server."
             )
+            return
+
+        lines = format_picks_by_player(
+            picks, f"**Week {week_number} Picks ({ctx.guild.name}):**\n"
+        )
+        await send_chunked(ctx.send, lines)
 
 
 async def setup(bot):

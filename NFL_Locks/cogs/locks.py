@@ -11,6 +11,7 @@ from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season
 from NFL_Locks.utils.database import get_db
 import logging
 from NFL_Locks.utils.rate_limiter import rate_limiter
+from NFL_Locks.utils.pick_format import format_picks_by_player, send_chunked
 
 logger = logging.getLogger('cogs.locks')
 
@@ -128,33 +129,11 @@ class Locks(commands.Cog):
             )
             return
 
-        # Pivot {team: [user_names]} → {user_name: [teams]} for user-centric display
-        user_picks: dict[str, list[str]] = {}
-        for team, users in picks.items():
-            for user in users:
-                user_picks.setdefault(user, []).append(team)
-
-        lines = [f"**Week {week_number}: Picks Locked!**\n"]
-        for user in sorted(user_picks.keys()):
-            teams = sorted(user_picks[user])
-            lines.append(f"**{user}**: {', '.join(teams)}")
-
-        # Discord has a 2000-char limit; chunk if needed
-        message = "\n".join(lines)
-        if len(message) <= 2000:
-            await rate_limiter.send(channel, message)
-        else:
-            # Send header first, then user chunks
-            await rate_limiter.send(channel, lines[0])
-            chunk, chunk_len = [], 0
-            for line in lines[1:]:
-                if chunk_len + len(line) + 1 > 1900:
-                    await rate_limiter.send(channel, "\n".join(chunk))
-                    chunk, chunk_len = [], 0
-                chunk.append(line)
-                chunk_len += len(line) + 1
-            if chunk:
-                await rate_limiter.send(channel, "\n".join(chunk))
+        # Grouping and chunking are shared with !check_reactions via
+        # utils/pick_format so the posted summary and the on-demand view cannot
+        # drift apart.
+        lines = format_picks_by_player(picks, f"**Week {week_number}: Picks Locked!**\n")
+        await send_chunked(lambda m: rate_limiter.send(channel, m), lines)
 
 
 async def setup(bot):

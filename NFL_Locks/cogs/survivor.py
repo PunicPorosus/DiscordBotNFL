@@ -816,16 +816,21 @@ class SurvivorGame(commands.Cog):
                         f"Week {week} streak={new_streak} guild {guild_id}"
                     )
 
-            # -- Win condition: last survivors standing -------------------------
-            # Scenario A: everyone eliminated simultaneously → all were finalists
+            # -- Win condition: last survivor standing --------------------------
+            # A full wipeout produces NO winner. Everyone alive got knocked out in
+            # the same week, so nobody survived and nobody earns the pool.
+            #
+            # This previously converted every eliminated player into a winner on
+            # the reasoning that they were all "finalists". In Week 1 that crowned
+            # the entire pool as champions on day one and ended the season
+            # immediately. The rule now matches the game: you win by surviving, or
+            # by reaching SURVIVOR_WIN_STREAK. Busting is losing, however many
+            # others bust alongside you.
             if not survivors and newly_eliminated:
-                for r in results:
-                    if r["outcome"] in ("eliminated", "no_pick"):
-                        r["outcome"] = "winner"
-                        logger.info(
-                            f"[SURVIVOR] {r['user_name']} declared winner "
-                            f"(all-eliminated scenario) Week {week}"
-                        )
+                logger.info(
+                    f"[SURVIVOR] Full wipeout in guild {guild_id} Week {week}: "
+                    f"{len(newly_eliminated)} eliminated, no survivors, no winner"
+                )
 
             # Scenario B: the field is down to a single survivor.
             # This week's eliminations are already committed to the DB above, so
@@ -992,10 +997,14 @@ class SurvivorGame(commands.Cog):
 
         lines = [f"**Week {week} Survivor Results**"]
 
+        # Full wipeout: results only ever contains players who were alive going in,
+        # so no winners and no survivors means the whole remaining field is out.
+        wiped_out = bool(not winners and not survived and (eliminated or no_pick))
+
         if winners:
             names = ", ".join(f"**{r['user_name']}**" for r in winners)
             streaks = ", ".join(str(r["streak"]) for r in winners)
-            lines.append(f"\nTROPHY **SURVIVOR WINNER(S):** {names} (streak: {streaks})")
+            lines.append(f"\n🏆 **SURVIVOR WINNER(S):** {names} (streak: {streaks})")
 
         if survived:
             lines.append("\nSURVIVED:")
@@ -1011,6 +1020,12 @@ class SurvivorGame(commands.Cog):
             lines.append("\nELIMINATED (no pick):")
             for r in no_pick:
                 lines.append(f"  {r['user_name']}")
+
+        if wiped_out:
+            lines.append(
+                "\n**No survivors remain.** Everyone still in the pool was "
+                "eliminated this week, so Survivor ends with no winner."
+            )
 
         await channel.send("\n".join(lines))
 
@@ -1053,10 +1068,16 @@ class SurvivorGame(commands.Cog):
         await db.set_survivor_config(guild_id, channel_id, start_week, season)
         self.survivor_channel_ids.add(ctx.channel.id)
 
-        # Reload the cache for the new channel from DB
-        all_msgs = await db.get_all_survivor_messages(guild_id)
-        for msg in all_msgs:
-            self._msg_cache[msg["message_id"]] = msg["week"]
+        # Reload the cache for the new channel from DB.
+        #
+        # This passed guild_id where the signature takes season, so the query
+        # matched nothing and the loop below was a no-op: the cache was never
+        # actually reloaded after a channel move. Correcting only the argument
+        # would have crashed instead, because the return is {message_id: week}
+        # and iterating a dict yields int keys, making msg["message_id"] a
+        # 'int' object is not subscriptable TypeError. Same one-line form
+        # cog_load already uses.
+        self._msg_cache.update(await db.get_all_survivor_messages(season))
 
         await ctx.send(
             f"Survivor channel set to **#{ctx.channel.name}**.\n"
