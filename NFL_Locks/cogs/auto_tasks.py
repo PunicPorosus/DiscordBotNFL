@@ -245,6 +245,13 @@ class AutoTasks(commands.Cog):
                 )
                 await asyncio.sleep(2)
 
+                # Then next week's survivor matchups, so the survivor channel
+                # reads results first. The hourly catchup holds survivor back
+                # until this routine has run, so this is the normal path.
+                if next_week and next_week <= max_week:
+                    await self._post_survivor_matchups(channel.guild, next_week)
+                    await asyncio.sleep(2)
+
                 # Mark the routine complete only after every step above has run
                 # for this guild, so a partial pass is retried rather than
                 # silently skipped forever.
@@ -336,6 +343,21 @@ class AutoTasks(commands.Cog):
         except Exception as e:
             logger.error(f"[SURVIVOR] Error processing Week {week_num}: {e}", exc_info=True)
             return {}
+
+    async def _post_survivor_matchups(self, guild, week_num):
+        """Post week_num's survivor matchups for one guild if not already up."""
+        survivor_cog = self.bot.get_cog('SurvivorGame')
+        if not survivor_cog:
+            return
+        try:
+            await survivor_cog.catchup_survivor_matchups(
+                week_num, only_guild_id=str(guild.id), after_results=True
+            )
+        except Exception as e:
+            logger.error(
+                f"[SURVIVOR] Error posting Week {week_num} matchups for {guild.name}: {e}",
+                exc_info=True,
+            )
 
     async def _post_survivor_results(self, guild, week_num, guild_results: dict):
         """Post survivor results to the guild's survivor channel if configured."""

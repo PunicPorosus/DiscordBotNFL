@@ -87,5 +87,13 @@ WINNERS_INCOMPLETE_GRACE_HOURS = 6
 # enough that the flip happens before Tuesday's 8 AM results/matchup automation.
 WEEK_BOUNDARY_HOUR = 3
 
+# -- Survivor ------------------------------------------------------------------
+# Survivor matchups for week N normally wait until week N-1's Tuesday routine
+# has posted that guild's survivor results. If that routine is stuck (winners
+# never fetched, for example), stop waiting once the deadline is this many hours
+# away. A survivor week that never opens eliminates every player for no pick,
+# which is far worse than results and matchups landing out of order.
+SURVIVOR_POST_FALLBACK_HOURS = 36
+
 # -- Discord / Message Limits --------------------------------------------------
 MAX_ERROR_MESSAGE_CHARS = 500      # Truncation limit for error text sent to Discord

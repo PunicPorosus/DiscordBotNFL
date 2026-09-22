@@ -28,7 +28,7 @@ week's deadline, no new enrollments are accepted.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import discord
 from discord.ext import commands
@@ -44,8 +44,10 @@ from NFL_Locks.utils.command_names import (
     CMD_SURVIVOR_PROCESS,
     CMD_SURVIVOR_STATUS,
 )
+from NFL_Locks.utils.config import MESSAGE_POST_DELAY, SURVIVOR_POST_FALLBACK_HOURS
 from NFL_Locks.utils.constants import NFL_TEAMS, EASTERN, emoji_to_team
 from NFL_Locks.utils.database import get_db
+from NFL_Locks.utils.rate_limiter import rate_limiter
 from NFL_Locks.utils.data_utils import load_full_schedule
 from NFL_Locks.utils.schedule_utils import get_current_season, get_max_week, find_current_week
 from NFL_Locks.utils.time_utils import is_deadline_passed, get_week_deadline
@@ -1086,11 +1088,20 @@ class SurvivorGame(commands.Cog):
 
     @commands.command(name=CMD_SURVIVOR_START)
     @commands.has_permissions(administrator=True)
-    async def survivor_start(self, ctx, week_num: int = None):
-        """Post this week's matchups in the survivor channel and open enrollment.
+    async def survivor_start(self, ctx, week_num: int = None, mode: str = None):
+        """Post a week's survivor matchups. The first run of the season opens enrollment.
 
-        Usage: !survivor_start [week]
-        Omit week to use the current NFL week.
+        Usage:
+          !survivor_start [week]
+          !survivor_start <week> repost
+
+        Omit week to use the current NFL week. After the opening week, the bot
+        posts each new week on its own once that guild's NFL Locks matchups are
+        up, so this is only needed to open the game or to repair a week.
+
+        If the week is already posted this refuses unless you add "repost". A
+        repost deletes the old messages, so every reaction on them goes with
+        them and players have to pick again.
         """
         db = get_db()
         season = get_current_season()
@@ -1122,73 +1133,255 @@ class SurvivorGame(commands.Cog):
             await ctx.send(f"No games found for Week {week_num}.")
             return
 
-        await db.set_survivor_config(guild_id, str(ctx.channel.id), week_num, season)
-        await db.clear_survivor_messages_for_week(season, week_num, guild_id)
+        repost = (mode or "").lower() == "repost"
+        if await db.get_survivor_messages_for_week(season, week_num, guild_id) and not repost:
+            await ctx.send(
+                f"Week {week_num} survivor matchups are already posted. Reposting "
+                f"deletes them and every pick made on them, so players would have "
+                f"to pick again. If you really want that, run "
+                f"`!survivor_start {week_num} repost`."
+            )
+            return
 
-        deadline = get_week_deadline(week_num)
-        deadline_str = deadline.strftime("%A, %B %d at %I:%M %p ET") if deadline else ""
+        # start_week is the only week new players may enroll in, and every
+        # results, lock summary and reconciliation pass skips weeks before it.
+        # This used to be overwritten with whatever week was being posted, so
+        # each weekly run reopened enrollment and dropped every earlier week
+        # out of reconciliation. Move it only while nobody has joined yet.
+        start_week = config["start_week"]
+        if config["season"] != season or not await db.get_all_survivor_players(season, guild_id):
+            start_week = week_num
+        await db.set_survivor_config(guild_id, str(ctx.channel.id), start_week, season)
 
-        await ctx.send(
-            f"**Survivor Week {week_num}**\n"
-            f"React with ONE team emoji to make your pick.\n"
-            f"You cannot pick a team you've already used this season.\n"
-            + (f"Picks lock at **{deadline_str}**\n" if deadline_str else "")
-            + f"*First reaction this week auto-enrolls you.*"
-        )
+        await self.post_survivor_matchups(ctx.channel, week_num, week_games)
 
-        channel_id_str = str(ctx.channel.id)
-        reaction_failures = 0
-        for game in week_games:
-            try:
-                away, home = game["away"], game["home"]
-                msg = await ctx.send(f"{away} @ {home}")
+    # -- Matchup posting -------------------------------------------------------
 
-                # Track the message BEFORE reacting, and never let a reaction
-                # failure abort the loop. Reactions came first here with no
-                # try/except at all, so one bad emoji skipped add_survivor_message
-                # and killed every remaining matchup. An untracked message makes
-                # _handle_reaction_add return early, so picks are silently not
-                # recorded and old reactions are never stripped.
-                await db.add_survivor_message(
-                    message_id=msg.id,
-                    guild_id=guild_id,
-                    channel_id=channel_id_str,
-                    season=season,
-                    week=week_num,
-                    team_a=away,
-                    team_b=home,
-                )
-                self._msg_cache[msg.id] = week_num
+    async def post_survivor_matchups(self, channel, week_num: int, week_games: list) -> bool:
+        """Post a week's survivor matchups to a channel, replacing any existing ones.
 
-                for team in (away, home):
-                    if team not in NFL_TEAMS:
+        Mirrors GamesManager.post_games_to_channel: old tracked messages are
+        deleted from Discord as well as from the DB, sends go through the rate
+        limiter, and reaction failures reach the admin log channel instead of
+        only the survivor channel, which nobody is watching when this runs from
+        a timer.
+
+        Callers that must not wipe live picks check for existing messages
+        first. This function always replaces.
+        """
+        db = get_db()
+        season = get_current_season()
+        guild_id = str(channel.guild.id)
+        channel_id_str = str(channel.id)
+
+        try:
+            # -- Clean up existing messages -------------------------------------
+            # Only clearing the DB rows left the old posts sitting in the channel
+            # looking pickable while the bot ignored every reaction on them.
+            existing = await db.get_survivor_messages_for_week(season, week_num, guild_id)
+            for ch_id, message_ids in existing.items():
+                old_channel = self.bot.get_channel(int(ch_id))
+                for message_id in message_ids:
+                    self._msg_cache.pop(message_id, None)
+                    if not old_channel:
                         continue
                     try:
-                        await msg.add_reaction(NFL_TEAMS[team])
+                        old_msg = await old_channel.fetch_message(message_id)
+                        await old_msg.delete()
+                    except discord.NotFound:
+                        pass
                     except Exception as e:
-                        reaction_failures += 1
-                        logger.error(
-                            f"[SURVIVOR] Could not add {team} reaction to "
-                            f"message {msg.id}: {e!r}"
-                        )
-            except Exception as e:
-                logger.error(f"[SURVIVOR] Error posting matchup {game}: {e}", exc_info=True)
+                        logger.error(f"[SURVIVOR] Error deleting message {message_id}: {e!r}")
+                    await asyncio.sleep(MESSAGE_POST_DELAY)
 
-        if reaction_failures:
-            logger.error(
-                f"[SURVIVOR] {reaction_failures} reaction(s) failed for Week {week_num}; "
-                f"players cannot pick on a matchup with no team emojis"
-            )
-            await ctx.send(
-                f"Warning: {reaction_failures} reaction(s) failed to post. "
-                f"Matchups are tracked, but players cannot pick until this is fixed."
+            await db.clear_survivor_messages_for_week(season, week_num, guild_id)
+
+            # -- Post new matchups ----------------------------------------------
+            deadline = get_week_deadline(week_num)
+            deadline_str = deadline.strftime("%A, %B %d at %I:%M %p ET") if deadline else ""
+
+            config = await db.get_survivor_config(guild_id)
+            enrollment_open = bool(config and config["start_week"] == week_num)
+
+            await rate_limiter.send(
+                channel,
+                f"**Survivor Week {week_num}**\n"
+                f"React with ONE team emoji to make your pick.\n"
+                f"You cannot pick a team you've already used this season.\n"
+                + (f"Picks lock at **{deadline_str}**\n" if deadline_str else "")
+                + ("*First reaction this week auto-enrolls you.*" if enrollment_open else "")
             )
 
-        await ctx.send(f"Week {week_num} survivor matchups posted! Good luck.")
-        logger.info(
-            f"[SURVIVOR] Posted Week {week_num} games in guild {ctx.guild.name} "
-            f"({len(week_games)} matchups)"
+            posted = 0
+            reaction_failures = 0
+            for game in week_games:
+                try:
+                    away, home = game["away"], game["home"]
+                    msg = await rate_limiter.send(channel, f"{away} @ {home}")
+
+                    # Track the message BEFORE reacting, and never let a reaction
+                    # failure abort the loop. Reactions came first here with no
+                    # try/except at all, so one bad emoji skipped add_survivor_message
+                    # and killed every remaining matchup. An untracked message makes
+                    # _handle_reaction_add return early, so picks are silently not
+                    # recorded and old reactions are never stripped.
+                    await db.add_survivor_message(
+                        message_id=msg.id,
+                        guild_id=guild_id,
+                        channel_id=channel_id_str,
+                        season=season,
+                        week=week_num,
+                        team_a=away,
+                        team_b=home,
+                    )
+                    self._msg_cache[msg.id] = week_num
+                    posted += 1
+
+                    for team in (away, home):
+                        if team not in NFL_TEAMS:
+                            continue
+                        try:
+                            await msg.add_reaction(NFL_TEAMS[team])
+                        except Exception as e:
+                            reaction_failures += 1
+                            logger.error(
+                                f"[SURVIVOR] Could not add {team} reaction to "
+                                f"message {msg.id}: {e!r}"
+                            )
+                except Exception as e:
+                    logger.error(f"[SURVIVOR] Error posting matchup {game}: {e}", exc_info=True)
+
+            if reaction_failures:
+                logger.error(
+                    f"[SURVIVOR] {reaction_failures} reaction(s) failed for Week {week_num} "
+                    f"in #{channel.name}; players cannot pick on a matchup with no team emojis"
+                )
+                from BotUtils.notify import notify_admin
+                await notify_admin(
+                    self.bot,
+                    f"**Survivor Week {week_num} posted to #{channel.name}, but "
+                    f"{reaction_failures} reactions failed.** Matchups are tracked, so "
+                    f"this will not repost on a loop, but players cannot pick until the "
+                    f"emojis are fixed. Check the bot's Add Reactions and Use External "
+                    f"Emoji permissions in that server."
+                )
+
+            await rate_limiter.send(channel, f"Week {week_num} survivor matchups posted! Good luck.")
+            logger.info(
+                f"[SURVIVOR] Posted Week {week_num} games in guild {channel.guild.name} "
+                f"({posted}/{len(week_games)} matchups tracked)"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"[SURVIVOR] Error in post_survivor_matchups: {e}", exc_info=True)
+            return False
+
+    async def catchup_survivor_matchups(
+        self, week_num: int, only_guild_id: "str | None" = None, after_results: bool = False
+    ) -> None:
+        """Post week_num's survivor matchups to every guild that is ready for them.
+
+        Called hourly after GamesManager's matchup catchup, and from the Tuesday
+        routine right after that guild's survivor results. Never replaces
+        anything: a guild that already has this week's survivor posts is left
+        alone, so this cannot wipe live picks the way a timed repost would.
+
+        A guild is ready when all of these hold:
+          - survivor is active for this season and the game has been opened,
+            meaning players have enrolled or this is the start week. Before
+            that, only enrollment in start_week is possible, so posting a later
+            week would just reject every reaction.
+          - its NFL Locks matchups for the week are already posted, if it has a
+            locks channel at all. Survivor always goes second.
+          - last week's survivor results are out (the weekly routine finished
+            for that guild), so the channel reads results then new games and
+            nobody picks for this week before learning they were eliminated.
+            after_results=True means the caller has just done that.
+
+        Once the deadline is SURVIVOR_POST_FALLBACK_HOURS away it stops waiting
+        on the last two and posts anyway, with an admin alert. A survivor week
+        that never opens eliminates everyone who could not pick.
+        """
+        if is_deadline_passed(week_num):
+            return
+
+        db = get_db()
+        season = get_current_season()
+        schedule = load_full_schedule()
+        week_games = schedule.get(str(week_num))
+        if not week_games:
+            return
+
+        locks_guilds = {str(gid) for gid in await db.get_all_configured_guilds()}
+        deadline = get_week_deadline(week_num)
+        near_deadline = bool(
+            deadline
+            and datetime.now(EASTERN) >= deadline - timedelta(hours=SURVIVOR_POST_FALLBACK_HOURS)
         )
+
+        for cfg in await db.get_all_survivor_configs():
+            guild_id = str(cfg["guild_id"])
+            if only_guild_id is not None and guild_id != str(only_guild_id):
+                continue
+            if cfg["season"] != season or cfg["start_week"] > week_num:
+                continue
+
+            if await db.get_survivor_messages_for_week(season, week_num, guild_id):
+                continue
+
+            if cfg["start_week"] != week_num and not await db.get_all_survivor_players(season, guild_id):
+                logger.debug(
+                    f"[SURVIVOR] Guild {guild_id} has not opened survivor yet, "
+                    f"not auto-posting Week {week_num}"
+                )
+                continue
+
+            waiting_on_locks = guild_id in locks_guilds and not await db.get_messages_for_week(
+                season, week_num, guild_id
+            )
+            if waiting_on_locks and not near_deadline:
+                logger.debug(
+                    f"[SURVIVOR] Waiting on NFL Locks Week {week_num} in guild {guild_id}"
+                )
+                continue
+
+            prev_week = week_num - 1
+            waiting_on_results = (
+                not after_results
+                and prev_week >= cfg["start_week"]
+                and guild_id in locks_guilds
+                and not await db.is_weekly_routine_posted(season, prev_week, guild_id)
+            )
+            if waiting_on_results and not near_deadline:
+                logger.debug(
+                    f"[SURVIVOR] Waiting on Week {prev_week} results in guild {guild_id} "
+                    f"before posting Week {week_num}"
+                )
+                continue
+
+            channel = self.bot.get_channel(cfg["channel_id"])
+            if not channel:
+                logger.warning(
+                    f"[SURVIVOR] Channel {cfg['channel_id']} not found for guild {guild_id}"
+                )
+                continue
+
+            if waiting_on_locks or waiting_on_results:
+                missing = []
+                if waiting_on_locks:
+                    missing.append(f"NFL Locks Week {week_num} matchups")
+                if waiting_on_results:
+                    missing.append(f"Week {prev_week} survivor results")
+                from BotUtils.notify import notify_admin
+                await notify_admin(
+                    self.bot,
+                    f"**Survivor Week {week_num} posted to #{channel.name} without "
+                    f"{' or '.join(missing)}.** The deadline is close, so the matchups "
+                    f"went up anyway rather than leave players unable to pick."
+                )
+
+            await self.post_survivor_matchups(channel, week_num, week_games)
 
     @commands.command(name=CMD_SURVIVOR_PROCESS)
     @commands.has_permissions(administrator=True)

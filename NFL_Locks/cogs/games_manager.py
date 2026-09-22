@@ -49,6 +49,18 @@ class GamesManager(commands.Cog):
         except Exception as e:
             logger.error(f"Hourly game catchup failed: {e}", exc_info=True)
 
+        # Survivor goes second, per guild, only once that guild's locks are up.
+        # Run separately so a locks failure cannot skip it, and so a survivor
+        # post that failed last hour gets retried even though catchup_games
+        # returns early once every guild has its locks matchups.
+        try:
+            survivor_cog = self.bot.get_cog('SurvivorGame')
+            current_week = self._get_current_week_info(datetime.now(EASTERN))
+            if survivor_cog and current_week:
+                await survivor_cog.catchup_survivor_matchups(current_week)
+        except Exception as e:
+            logger.error(f"Hourly survivor matchup catchup failed: {e}", exc_info=True)
+
     @catchup_games_loop.before_loop
     async def _before_catchup_games_loop(self):
         """Guilds and channels are not resolvable until the bot is ready."""
