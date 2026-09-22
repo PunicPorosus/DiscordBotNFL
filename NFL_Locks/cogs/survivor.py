@@ -48,6 +48,7 @@ from NFL_Locks.utils.config import MESSAGE_POST_DELAY, SURVIVOR_POST_FALLBACK_HO
 from NFL_Locks.utils.constants import NFL_TEAMS, EASTERN, emoji_to_team
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.rate_limiter import rate_limiter
+from NFL_Locks.utils.channel_lock import locked_channel
 from NFL_Locks.utils.data_utils import load_full_schedule
 from NFL_Locks.utils.schedule_utils import get_current_season, get_max_week, find_current_week
 from NFL_Locks.utils.time_utils import is_deadline_passed, get_week_deadline
@@ -1158,6 +1159,11 @@ class SurvivorGame(commands.Cog):
     # -- Matchup posting -------------------------------------------------------
 
     async def post_survivor_matchups(self, channel, week_num: int, week_games: list) -> bool:
+        """Post survivor matchups with the channel locked so nobody can type mid-post."""
+        async with locked_channel(self.bot, channel):
+            return await self._post_survivor_matchups(channel, week_num, week_games)
+
+    async def _post_survivor_matchups(self, channel, week_num: int, week_games: list) -> bool:
         """Post a week's survivor matchups to a channel, replacing any existing ones.
 
         Mirrors GamesManager.post_games_to_channel: old tracked messages are

@@ -14,6 +14,7 @@ from NFL_Locks.utils.schedule_utils import (
 from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.command_names import CMD_POST_GAMES, CMD_REPOST_GAMES
 from NFL_Locks.utils.rate_limiter import rate_limiter
+from NFL_Locks.utils.channel_lock import locked_channel
 
 logger = logging.getLogger('cogs.games_manager')
 
@@ -121,6 +122,11 @@ class GamesManager(commands.Cog):
             await self.post_games_to_channel(channel, current_week, week_games)
 
     async def post_games_to_channel(self, channel, week_number, matchups):
+        """Post game matchups with the channel locked so nobody can type mid-post."""
+        async with locked_channel(self.bot, channel):
+            return await self._post_games_to_channel(channel, week_number, matchups)
+
+    async def _post_games_to_channel(self, channel, week_number, matchups):
         """
         Post game matchups to a channel with team emoji reactions.
 

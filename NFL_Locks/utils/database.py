@@ -718,6 +718,20 @@ class NFLLocksDB:
         )
         await self._conn.commit()
 
+    async def delete_bot_meta(self, key: str) -> None:
+        """Delete one bot_meta key. Never use this to clear the table."""
+        await self._conn.execute("DELETE FROM bot_meta WHERE key = ?", (key,))
+        await self._conn.commit()
+
+    async def get_bot_meta_by_prefix(self, prefix: str) -> "dict[str, str]":
+        """Return {key: value} for every bot_meta key starting with prefix."""
+        async with self._conn.execute(
+            "SELECT key, value FROM bot_meta WHERE substr(key, 1, ?) = ?",
+            (len(prefix), prefix),
+        ) as cur:
+            rows = await cur.fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
     # -- Heartbeat -------------------------------------------------------------
 
     async def set_heartbeat(self):

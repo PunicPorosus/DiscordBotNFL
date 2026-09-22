@@ -115,6 +115,14 @@ class StartupCoordinator(commands.Cog):
             await get_db().refresh_guild_names(guild_map)
             logger.info(f"Guild names refreshed for {len(guild_map)} guild(s)")
 
+            # Unlock any channel a restart left locked partway through a post,
+            # before anything below tries to post into it.
+            from NFL_Locks.utils.channel_lock import restore_stale_locks
+            try:
+                await restore_stale_locks(self.bot)
+            except Exception as e:
+                logger.error(f"Stale channel lock restore failed: {e}", exc_info=True)
+
             # Step 2: Build Message Cache
             logger.info("Step 2/7: Building message cache...")
             await cache_cog.build_message_cache()
