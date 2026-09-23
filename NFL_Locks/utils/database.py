@@ -185,6 +185,15 @@ CREATE TABLE IF NOT EXISTS survivor_locks_posted (
     PRIMARY KEY (season, week, guild_id)
 );
 
+CREATE TABLE IF NOT EXISTS pick_nudges_sent (
+    season      INTEGER NOT NULL,
+    week        INTEGER NOT NULL,
+    guild_id    TEXT    NOT NULL,
+    user_id     TEXT    NOT NULL,
+    sent_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (season, week, guild_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS survivor_results_posted (
     season      INTEGER NOT NULL,
     week        INTEGER NOT NULL,
@@ -1794,6 +1803,65 @@ class NFLLocksDB:
             (season, week, str(guild_id)),
         ) as cur:
             return await cur.fetchone() is not None
+
+    # -- Pick nudges -----------------------------------------------------------
+
+    async def was_nudge_sent(
+        self, season: int, week: int, guild_id: int | str, user_id: int | str
+    ) -> bool:
+        async with self._conn.execute(
+            """SELECT 1 FROM pick_nudges_sent
+               WHERE season=? AND week=? AND guild_id=? AND user_id=?""",
+            (season, week, str(guild_id), str(user_id)),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def mark_nudge_sent(
+        self, season: int, week: int, guild_id: int | str, user_id: int | str
+    ) -> None:
+        """Record a nudge attempt. Written after every attempt, including failures.
+
+        A player with DMs closed cannot be reached this week however many times
+        the bot tries, so a bounce is banked exactly like a delivery.
+        """
+        await self._conn.execute(
+            """INSERT OR IGNORE INTO pick_nudges_sent (season, week, guild_id, user_id)
+               VALUES (?, ?, ?, ?)""",
+            (season, week, str(guild_id), str(user_id)),
+        )
+        await self._conn.commit()
+
+    async def get_first_message_for_week(
+        self, season: int, week: int, guild_id: int | str
+    ) -> "tuple[str, str] | None":
+        """Return (channel_id, message_id) of the week's first tracked matchup post.
+
+        Message IDs are snowflakes, so numeric order is post order. They are
+        stored as TEXT, hence the CAST: string order would break the moment
+        snowflakes gain a digit.
+        """
+        async with self._conn.execute(
+            """SELECT channel_id, message_id FROM tracked_messages
+               WHERE season=? AND week=? AND guild_id=?
+               ORDER BY CAST(message_id AS INTEGER) ASC LIMIT 1""",
+            (season, week, str(guild_id)),
+        ) as cur:
+            row = await cur.fetchone()
+        return (row["channel_id"], row["message_id"]) if row else None
+
+    async def get_first_survivor_message_for_week(
+        self, season: int, week: int, guild_id: int | str
+    ) -> "tuple[str, str] | None":
+        """Return (channel_id, message_id) of the week's first survivor matchup post."""
+        async with self._conn.execute(
+            """SELECT channel_id, message_id FROM survivor_messages
+               WHERE season=? AND week=? AND guild_id=?
+               ORDER BY CAST(message_id AS INTEGER) ASC LIMIT 1""",
+            (season, week, str(guild_id)),
+        ) as cur:
+            row = await cur.fetchone()
+        return (row["channel_id"], row["message_id"]) if row else None
+
 
 # ---------------------------------------------------------------------------
 # Singleton

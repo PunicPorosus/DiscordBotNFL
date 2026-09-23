@@ -82,39 +82,12 @@ class ReactionCatchup(commands.Cog):
                 f"deadline in {int(time_until)} min at {deadline.strftime('%I:%M %p ET')}"
             )
 
-            configured_guilds = await get_db().get_all_configured_guilds()
-
-            # Announce before sync, locks channels
-            for guild_id, channel_id in configured_guilds.items():
-                channel = self.bot.get_channel(channel_id)
-                if channel:
-                    try:
-                        await channel.send(
-                            f"**Final call for selections!**\n\n"
-                            f"Locks choices will be locking at kickoff. "
-                            f"Player's recorded selections will be posted shortly thereafter."
-                        )
-                    except Exception as e:
-                        logger.error(f"Error announcing in guild {guild_id}: {e}")
-
-            # Announce before sync, survivor channels (separate from locks)
-            survivor_cog = self.bot.get_cog('SurvivorGame')
-            if survivor_cog:
-                survivor_configs = await get_db().get_all_survivor_configs()
-                for scfg in survivor_configs:
-                    s_channel = self.bot.get_channel(scfg["channel_id"])
-                    if s_channel:
-                        try:
-                            await s_channel.send(
-                                f"**Final call for selections!**\n\n"
-                                f"Survivor choices will be locking at kickoff. "
-                                f"Player's recorded selections will be posted shortly thereafter."
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Error announcing survivor sync in channel "
-                                f"{scfg['channel_id']}: {e}"
-                            )
+            # The "Final call for selections!" posts that used to go out here,
+            # to every locks and survivor channel, were replaced by the DM
+            # nudges in cogs/nudges.py: those reach the players who actually
+            # have something missing, 6 hours out instead of 10 minutes, and
+            # leave the channels quiet. The lock summary still posts at kickoff
+            # as the record of what the bot had.
 
             sync_ok = await self.process_week_reactions(current_week)
 

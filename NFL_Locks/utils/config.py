@@ -95,5 +95,11 @@ WEEK_BOUNDARY_HOUR = 3
 # which is far worse than results and matchups landing out of order.
 SURVIVOR_POST_FALLBACK_HOURS = 36
 
+# -- Pick nudges ---------------------------------------------------------------
+# A courtesy DM to players with no pick recorded, sent once per player per week.
+NUDGE_HOURS_BEFORE_DEADLINE = 6    # How long before kickoff the DMs go out
+NUDGE_DM_DELAY_SECONDS = 5         # Pause between DMs, to stay clear of DM rate limits
+NUDGE_LOOKBACK_WEEKS = 2           # A locks player is nudged if they picked within this many prior weeks
+
 # -- Discord / Message Limits --------------------------------------------------
 MAX_ERROR_MESSAGE_CHARS = 500      # Truncation limit for error text sent to Discord

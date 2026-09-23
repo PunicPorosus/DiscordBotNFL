@@ -84,6 +84,7 @@ initial_extensions = [
     "NFL_Locks.cogs.season_management",
     "NFL_Locks.cogs.season_wrapup",
     "NFL_Locks.cogs.survivor",
+    "NFL_Locks.cogs.nudges",           # Pre-deadline DM nudges
     # Trade evaluator (standalone module)
     "Trade_Eval.trade_eval",
     # Bot-wide cogs

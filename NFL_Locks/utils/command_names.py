@@ -90,6 +90,9 @@ CMD_RESET_COOLDOWNS         = "reset_cooldowns"
 CMD_FETCH_WINNERS           = "fetch_winners"
 CMD_SHOW_WINNERS            = "show_winners"
 
+# -- nudges.py -----------------------------------------------------------------
+CMD_NUDGE_PREVIEW           = "nudge_preview"
+
 # -- survivor.py ---------------------------------------------------------------
 CMD_SURVIVOR_SETUP          = "survivor_setup"
 CMD_SURVIVOR_START          = "survivor_start"
