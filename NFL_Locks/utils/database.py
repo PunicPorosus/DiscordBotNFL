@@ -192,6 +192,71 @@ CREATE TABLE IF NOT EXISTS survivor_results_posted (
     posted_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (season, week, guild_id)
 );
+
+-- Winners of the CURRENT session. Cleared into the archive by a reset.
+CREATE TABLE IF NOT EXISTS survivor_winners (
+    season      INTEGER NOT NULL,
+    guild_id    TEXT    NOT NULL,
+    session     INTEGER NOT NULL DEFAULT 1,
+    user_id     TEXT    NOT NULL,
+    user_name   TEXT    NOT NULL,
+    week        INTEGER NOT NULL,
+    reason      TEXT    NOT NULL,
+    streak      INTEGER NOT NULL DEFAULT 0,
+    declared_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (season, guild_id, session, user_id)
+);
+
+-- -- Survivor archive ----------------------------------------------------------
+-- A soft reset moves the finished session's rows here and clears the live
+-- tables, so every live query keeps its (season, guild) keys and never has to
+-- know about sessions. Nothing reads these tables at runtime; they exist so a
+-- reset is not a delete.
+CREATE TABLE IF NOT EXISTS survivor_archive_sessions (
+    season        INTEGER NOT NULL,
+    guild_id      TEXT    NOT NULL,
+    session       INTEGER NOT NULL,
+    start_week    INTEGER,
+    ended_week    INTEGER,
+    ended_reason  TEXT,
+    archived_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (season, guild_id, session)
+);
+
+CREATE TABLE IF NOT EXISTS survivor_picks_archive (
+    season      INTEGER NOT NULL,
+    guild_id    TEXT    NOT NULL,
+    session     INTEGER NOT NULL,
+    week        INTEGER NOT NULL,
+    user_id     TEXT    NOT NULL,
+    user_name   TEXT    NOT NULL,
+    team        TEXT    NOT NULL,
+    PRIMARY KEY (season, guild_id, session, week, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS survivor_status_archive (
+    season          INTEGER NOT NULL,
+    guild_id        TEXT    NOT NULL,
+    session         INTEGER NOT NULL,
+    user_id         TEXT    NOT NULL,
+    user_name       TEXT    NOT NULL,
+    eliminated      INTEGER NOT NULL DEFAULT 0,
+    eliminated_week INTEGER,
+    correct_streak  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (season, guild_id, session, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS survivor_winners_archive (
+    season      INTEGER NOT NULL,
+    guild_id    TEXT    NOT NULL,
+    session     INTEGER NOT NULL,
+    user_id     TEXT    NOT NULL,
+    user_name   TEXT    NOT NULL,
+    week        INTEGER NOT NULL,
+    reason      TEXT    NOT NULL,
+    streak      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (season, guild_id, session, user_id)
+);
 """
 
 
@@ -223,6 +288,9 @@ class NFLLocksDB:
             "ALTER TABLE guild_config ADD COLUMN guild_name TEXT",
             "ALTER TABLE guild_config ADD COLUMN scoring_scheme TEXT NOT NULL DEFAULT 'all_or_nothing'",
             "ALTER TABLE week_guild_status ADD COLUMN reconciliation_failed INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE survivor_config ADD COLUMN session INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE survivor_config ADD COLUMN ended_week INTEGER",
+            "ALTER TABLE survivor_config ADD COLUMN ended_reason TEXT",
         ):
             try:
                 await self._conn.execute(_col_sql)
@@ -1166,11 +1234,24 @@ class NFLLocksDB:
         start_week: int,
         season: int,
     ) -> None:
-        """Create or replace the survivor config for a guild."""
+        """Create or update the survivor config for a guild, and mark it active.
+
+        An upsert rather than INSERT OR REPLACE: a replace reset session,
+        ended_week and ended_reason to their defaults, so !survivor_setup on a
+        guild that had already played would silently rewind its session counter
+        and let the next reset overwrite the archive it had already written.
+        """
         await self._conn.execute(
-            """INSERT OR REPLACE INTO survivor_config
-               (guild_id, channel_id, start_week, season, active)
-               VALUES (?, ?, ?, ?, 1)""",
+            """INSERT INTO survivor_config
+                   (guild_id, channel_id, start_week, season, active)
+               VALUES (?, ?, ?, ?, 1)
+               ON CONFLICT(guild_id) DO UPDATE SET
+                   channel_id=excluded.channel_id,
+                   start_week=excluded.start_week,
+                   season=excluded.season,
+                   active=1,
+                   ended_week=NULL,
+                   ended_reason=NULL""",
             (str(guild_id), str(channel_id), start_week, season),
         )
         await self._conn.commit()
@@ -1190,6 +1271,9 @@ class NFLLocksDB:
             "start_week": row["start_week"],
             "season": row["season"],
             "active": bool(row["active"]),
+            "session": row["session"],
+            "ended_week": row["ended_week"],
+            "ended_reason": row["ended_reason"],
         }
 
     async def get_all_survivor_configs(self) -> "list[dict]":
@@ -1204,6 +1288,7 @@ class NFLLocksDB:
                 "channel_id": int(r["channel_id"]),
                 "start_week": r["start_week"],
                 "season": r["season"],
+                "session": r["session"],
             }
             for r in rows
         ]
@@ -1215,6 +1300,181 @@ class NFLLocksDB:
             (str(guild_id),),
         )
         await self._conn.commit()
+
+    # -- Survivor game lifecycle -----------------------------------------------
+
+    async def end_survivor_game(
+        self,
+        season: int,
+        guild_id: int | str,
+        week: int,
+        reason: str,
+        winners: "list[dict]",
+    ) -> None:
+        """Close a guild's survivor game and record its winners.
+
+        active=0 is what actually stops the weekly machinery: matchup
+        auto-posting, nudges, lock summaries and reaction rebuilds all iterate
+        get_all_survivor_configs(), which only returns active rows.
+        """
+        guild_id = str(guild_id)
+        config = await self.get_survivor_config(guild_id)
+        session = config["session"] if config else 1
+
+        for w in winners:
+            await self._conn.execute(
+                """INSERT OR IGNORE INTO survivor_winners
+                   (season, guild_id, session, user_id, user_name, week, reason, streak)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    season, guild_id, session, str(w["user_id"]), w["user_name"],
+                    week, reason, int(w.get("streak") or 0),
+                ),
+            )
+
+        await self._conn.execute(
+            """UPDATE survivor_config
+               SET active=0, ended_week=?, ended_reason=?
+               WHERE guild_id=?""",
+            (week, reason, guild_id),
+        )
+        await self._conn.commit()
+
+    async def reopen_survivor_game(self, guild_id: int | str) -> bool:
+        """Undo an ending: reactivate the game and drop this session's winners.
+
+        Player status is left exactly as it is. An ending is usually wrong
+        because the week was processed against bad winners, and that is fixed
+        by correcting the winners and re-running !survivor_process, not by
+        resurrecting everyone here.
+        """
+        guild_id = str(guild_id)
+        config = await self.get_survivor_config(guild_id)
+        if not config:
+            return False
+
+        await self._conn.execute(
+            """DELETE FROM survivor_winners
+               WHERE season=? AND guild_id=? AND session=?""",
+            (config["season"], guild_id, config["session"]),
+        )
+        await self._conn.execute(
+            """UPDATE survivor_config
+               SET active=1, ended_week=NULL, ended_reason=NULL
+               WHERE guild_id=?""",
+            (guild_id,),
+        )
+        await self._conn.commit()
+        return True
+
+    async def get_survivor_winners(
+        self, season: int, guild_id: int | str, session: "int | None" = None
+    ) -> "list[dict]":
+        """Winners of the current session, or of a specific session."""
+        guild_id = str(guild_id)
+        if session is None:
+            config = await self.get_survivor_config(guild_id)
+            session = config["session"] if config else 1
+        async with self._conn.execute(
+            """SELECT user_id, user_name, week, reason, streak FROM survivor_winners
+               WHERE season=? AND guild_id=? AND session=?
+               ORDER BY user_name""",
+            (season, guild_id, session),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [
+            {
+                "user_id": r["user_id"],
+                "user_name": r["user_name"],
+                "week": r["week"],
+                "reason": r["reason"],
+                "streak": r["streak"],
+            }
+            for r in rows
+        ]
+
+    async def reset_survivor_game(
+        self, season: int, guild_id: int | str, channel_id: int | str, new_start_week: int
+    ) -> int:
+        """Archive the finished session, clear the live tables, open a new session.
+
+        Everything the old session recorded is copied into the *_archive tables
+        under its session number before anything is deleted, and the whole
+        thing is one transaction: a crash halfway cannot leave a guild with its
+        picks deleted and nothing archived. Returns the new session number.
+        """
+        guild_id = str(guild_id)
+        config = await self.get_survivor_config(guild_id)
+        session = config["session"] if config else 1
+        new_session = session + 1
+
+        try:
+            await self._conn.execute("BEGIN")
+
+            await self._conn.execute(
+                """INSERT OR REPLACE INTO survivor_archive_sessions
+                   (season, guild_id, session, start_week, ended_week, ended_reason)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    season, guild_id, session,
+                    config["start_week"] if config else None,
+                    config["ended_week"] if config else None,
+                    config["ended_reason"] if config else None,
+                ),
+            )
+            await self._conn.execute(
+                """INSERT OR REPLACE INTO survivor_picks_archive
+                       (season, guild_id, session, week, user_id, user_name, team)
+                   SELECT season, guild_id, ?, week, user_id, user_name, team
+                   FROM survivor_picks WHERE season=? AND guild_id=?""",
+                (session, season, guild_id),
+            )
+            await self._conn.execute(
+                """INSERT OR REPLACE INTO survivor_status_archive
+                       (season, guild_id, session, user_id, user_name,
+                        eliminated, eliminated_week, correct_streak)
+                   SELECT season, guild_id, ?, user_id, user_name,
+                          eliminated, eliminated_week, correct_streak
+                   FROM survivor_status WHERE season=? AND guild_id=?""",
+                (session, season, guild_id),
+            )
+            await self._conn.execute(
+                """INSERT OR REPLACE INTO survivor_winners_archive
+                       (season, guild_id, session, user_id, user_name, week, reason, streak)
+                   SELECT season, guild_id, session, user_id, user_name, week, reason, streak
+                   FROM survivor_winners WHERE season=? AND guild_id=? AND session=?""",
+                (season, guild_id, session),
+            )
+
+            for table in (
+                "survivor_picks",
+                "survivor_status",
+                "survivor_messages",
+                "survivor_results_posted",
+                "survivor_locks_posted",
+            ):
+                await self._conn.execute(
+                    f"DELETE FROM {table} WHERE season=? AND guild_id=?",
+                    (season, guild_id),
+                )
+            await self._conn.execute(
+                "DELETE FROM survivor_winners WHERE season=? AND guild_id=?",
+                (season, guild_id),
+            )
+
+            await self._conn.execute(
+                """UPDATE survivor_config
+                   SET channel_id=?, start_week=?, season=?, active=1,
+                       session=?, ended_week=NULL, ended_reason=NULL
+                   WHERE guild_id=?""",
+                (str(channel_id), new_start_week, season, new_session, guild_id),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+
+        return new_session
 
     # -- Survivor messages -----------------------------------------------------
 

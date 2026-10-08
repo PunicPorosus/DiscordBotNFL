@@ -8,10 +8,12 @@ Rules
   and warns the user if they attempt a repeat.
 - Failing to pick before the deadline = elimination.
 - A player is eliminated when their picked team loses.
-- Win by:  (a) 17 consecutive correct picks, OR
-           (b) being the last player(s) alive.
-- If all remaining players are eliminated simultaneously, all are declared
-  winners (they were the last finalists).
+- Win by:  (a) being the last player standing, OR
+           (b) still being alive when the regular season ends, which can be
+               several players at once.
+- If every remaining player is eliminated in the same week, that whole final
+  field wins together: they outlasted everyone else and went out level.
+- A win ends the game for that guild. !survivor_reset starts a fresh session.
 
 Pick mechanism
 --------------
@@ -43,6 +45,8 @@ from NFL_Locks.utils.command_names import (
     CMD_SURVIVOR_ELIMINATE,
     CMD_SURVIVOR_PROCESS,
     CMD_SURVIVOR_STATUS,
+    CMD_SURVIVOR_RESET,
+    CMD_SURVIVOR_REOPEN,
 )
 from NFL_Locks.utils.config import MESSAGE_POST_DELAY, SURVIVOR_POST_FALLBACK_HOURS
 from NFL_Locks.utils.constants import NFL_TEAMS, EASTERN, emoji_to_team
@@ -55,8 +59,11 @@ from NFL_Locks.utils.time_utils import is_deadline_passed, get_week_deadline
 
 logger = logging.getLogger("cogs.survivor")
 
-# A player wins outright after this many consecutive correct picks.
-SURVIVOR_WIN_STREAK = 17
+# Reasons a game can end, stored on survivor_config.ended_reason.
+END_LAST_STANDING = "last_standing"
+END_WIPEOUT = "wipeout"
+END_SEASON_END = "season_end"
+END_RESET = "reset"
 
 
 class SurvivorGame(commands.Cog):
@@ -726,9 +733,12 @@ class SurvivorGame(commands.Cog):
           - Players with a correct pick → streak incremented
           - Players with a wrong pick   → eliminated
           - Players with no pick        → eliminated (missed = out)
-          - Win conditions checked:
-              (a) streak reaches SURVIVOR_WIN_STREAK
-              (b) all remaining players eliminated simultaneously
+          - Win conditions checked, each of which ends the game:
+              (a) exactly one player left standing
+              (b) every remaining player eliminated in the same week, which
+                  makes that whole final field the winners
+              (c) the regular season's final week is processed, which makes
+                  everyone still alive a winner
 
         Returns {guild_id: [result_dict, ...]} where each result_dict has:
           user_id, user_name, outcome ('survived'|'eliminated'|'no_pick'|'winner'),
@@ -806,11 +816,10 @@ class SurvivorGame(commands.Cog):
                     # Correct pick, increment streak
                     new_streak = await db.increment_survivor_streak(season, guild_id, uid)
                     survivors.append(uid)
-                    won_by_streak = new_streak >= SURVIVOR_WIN_STREAK
                     results.append({
                         "user_id": uid,
                         "user_name": player["user_name"],
-                        "outcome": "winner" if won_by_streak else "survived",
+                        "outcome": "survived",
                         "team": pick,
                         "streak": new_streak,
                     })
@@ -819,38 +828,65 @@ class SurvivorGame(commands.Cog):
                         f"Week {week} streak={new_streak} guild {guild_id}"
                     )
 
-            # -- Win condition: last survivor standing --------------------------
-            # A full wipeout produces NO winner. Everyone alive got knocked out in
-            # the same week, so nobody survived and nobody earns the pool.
-            #
-            # This previously converted every eliminated player into a winner on
-            # the reasoning that they were all "finalists". In Week 1 that crowned
-            # the entire pool as champions on day one and ended the season
-            # immediately. The rule now matches the game: you win by surviving, or
-            # by reaching SURVIVOR_WIN_STREAK. Busting is losing, however many
-            # others bust alongside you.
+            # -- Win conditions -------------------------------------------------
+            # Each one ends the game for this guild. end_survivor_game sets
+            # active=0, which is what stops next week's matchups, nudges, lock
+            # summaries and reaction rebuilds: every one of them iterates
+            # get_all_survivor_configs(), and that only returns active games.
+            end_reason = None
+
             if not survivors and newly_eliminated:
+                # Full wipeout. The whole remaining field went out together in
+                # the same week, so they share it: nobody outlasted anybody.
+                #
+                # Note this crowns the field whenever it happens, including an
+                # early week where every entrant picks wrong at once. That is
+                # the rule as written, and a reset is how you start over.
+                for r in results:
+                    if r["outcome"] in ("eliminated", "no_pick"):
+                        r["outcome"] = "winner"
+                end_reason = END_WIPEOUT
                 logger.info(
                     f"[SURVIVOR] Full wipeout in guild {guild_id} Week {week}: "
-                    f"{len(newly_eliminated)} eliminated, no survivors, no winner"
+                    f"{len(newly_eliminated)} players win together"
                 )
 
-            # Scenario B: the field is down to a single survivor.
-            # This week's eliminations are already committed to the DB above, so
-            # re-querying alive players just returns `survivors` again and the old
-            # len(remaining_alive) == len(survivors) test was always true. That
-            # left `if newly_eliminated` as the only live condition, which crowned
-            # every survivor the first week anyone busted.
-            # Last standing means exactly one player is left, and at least one was
-            # knocked out this week so a lone entrant cannot win on a single pick.
             elif len(survivors) == 1 and newly_eliminated:
+                # Last standing. This week's eliminations are already committed
+                # above, so re-querying alive players would just return
+                # `survivors` again; the old len(remaining_alive) ==
+                # len(survivors) test was always true and left `if
+                # newly_eliminated` as the only live condition, which crowned
+                # every survivor the first week anyone busted. Requiring an
+                # elimination this week also stops a lone entrant winning on a
+                # single pick.
                 for r in results:
                     if r["outcome"] == "survived":
                         r["outcome"] = "winner"
-                        logger.info(
-                            f"[SURVIVOR] {r['user_name']} declared winner "
-                            f"(last standing) Week {week}"
-                        )
+                end_reason = END_LAST_STANDING
+                logger.info(
+                    f"[SURVIVOR] Last player standing in guild {guild_id} Week {week}"
+                )
+
+            elif survivors and week >= get_max_week():
+                # The regular season ran out. Everyone still alive wins, which
+                # is also what a perfect run from the start week amounts to, so
+                # there is no separate streak condition.
+                for r in results:
+                    if r["outcome"] == "survived":
+                        r["outcome"] = "winner"
+                end_reason = END_SEASON_END
+                logger.info(
+                    f"[SURVIVOR] Season ended in guild {guild_id} Week {week}: "
+                    f"{len(survivors)} mutual winner(s)"
+                )
+
+            if end_reason:
+                game_winners = [r for r in results if r["outcome"] == "winner"]
+                await db.end_survivor_game(
+                    season, guild_id, week, end_reason, game_winners
+                )
+                self.survivor_channel_ids.discard(cfg["channel_id"])
 
             guild_results[guild_id] = results
 
@@ -1000,9 +1036,9 @@ class SurvivorGame(commands.Cog):
 
         lines = [f"**Week {week} Survivor Results**"]
 
-        # Full wipeout: results only ever contains players who were alive going in,
-        # so no winners and no survivors means the whole remaining field is out.
-        wiped_out = bool(not winners and not survived and (eliminated or no_pick))
+        # A wipeout now crowns the field it wiped out, so the winners are the
+        # players who were eliminated this week and none survived.
+        wiped_out = bool(winners and not survived)
 
         if winners:
             names = ", ".join(f"**{r['user_name']}**" for r in winners)
@@ -1026,8 +1062,14 @@ class SurvivorGame(commands.Cog):
 
         if wiped_out:
             lines.append(
-                "\n**No survivors remain.** Everyone still in the pool was "
-                "eliminated this week, so Survivor ends with no winner."
+                "\n**Everyone left went out in the same week.** The final field "
+                "outlasted the rest of the pool and finishes level, so they all win."
+            )
+
+        if winners:
+            lines.append(
+                "\n**Survivor is over.** An admin can start a fresh game with "
+                "`!survivor_reset`."
             )
 
         await channel.send("\n".join(lines))
@@ -1116,6 +1158,14 @@ class SurvivorGame(commands.Cog):
         if ctx.channel.id != config["channel_id"]:
             ch_mention = f"<#{config['channel_id']}>"
             await ctx.send(f"Run this command in {ch_mention}.")
+            return
+
+        if not config["active"]:
+            await ctx.send(
+                f"Survivor ended in Week {config['ended_week']} "
+                f"({config['ended_reason']}). Use `!survivor_reset` to start a new "
+                f"game, or `!survivor_reopen` if it ended by mistake."
+            )
             return
 
         schedule = load_full_schedule()
@@ -1410,6 +1460,16 @@ class SurvivorGame(commands.Cog):
             await ctx.send("Survivor is not configured for this server.")
             return
 
+        if not config["active"]:
+            # process_survivor_week only walks active games, so without this the
+            # command would report "no alive survivors" and look like a bug.
+            await ctx.send(
+                f"Survivor ended in Week {config['ended_week']} "
+                f"({config['ended_reason']}), so there is nothing to process. "
+                f"`!survivor_reopen` first if that ending was wrong."
+            )
+            return
+
         await ctx.send(f"Processing Survivor Week {week_num}...")
         guild_results = await self.process_survivor_week(week_num)
 
@@ -1446,13 +1506,129 @@ class SurvivorGame(commands.Cog):
         alive = await db.get_alive_survivor_players(season, guild_id)
         all_players = await db.get_all_survivor_players(season, guild_id)
 
+        lines = [
+            "**Survivor Config**",
+            f"Channel: {ch_name}",
+            f"Start week: {config['start_week']}",
+            f"Season: {config['season']}",
+            f"Session: {config['session']}",
+            f"Total enrolled: {len(all_players)}",
+            f"Still alive: {len(alive)}",
+        ]
+
+        if config["active"]:
+            lines.append("State: running")
+        else:
+            lines.append(
+                f"State: ended in Week {config['ended_week']} "
+                f"({config['ended_reason']})"
+            )
+            winners = await db.get_survivor_winners(season, guild_id)
+            if winners:
+                names = ", ".join(w["user_name"] for w in winners)
+                lines.append(f"Winner(s): {names}")
+            lines.append("`!survivor_reset` starts a new game, `!survivor_reopen` undoes the ending.")
+
+        await ctx.send("\n".join(lines))
+
+    @commands.command(name=CMD_SURVIVOR_RESET)
+    @commands.has_permissions(administrator=True)
+    async def survivor_reset(self, ctx, week_num: int = None):
+        """End the current survivor game and start a fresh one, keeping the old data.
+
+        Usage: !survivor_reset [week]
+        Omit week to open the new game in the current NFL week.
+
+        The finished session is copied into the archive tables before the live
+        tables are cleared, so nothing is lost. The new session starts with an
+        empty field, open enrollment, and all 32 teams available again: the
+        once-per-season team rule is really once per session.
+
+        A game that is still running is ended first rather than refused. A
+        declared winner otherwise leaves the game sitting there until the season
+        runs out, and that is exactly when an admin wants to start the next one.
+        """
+        db = get_db()
+        season = get_current_season()
+        guild_id = str(ctx.guild.id)
+
+        config = await db.get_survivor_config(guild_id)
+        if not config:
+            await ctx.send("Survivor is not configured. Run `!survivor_setup` first.")
+            return
+
+        if ctx.channel.id != config["channel_id"]:
+            await ctx.send(f"Run this command in <#{config['channel_id']}>.")
+            return
+
+        schedule = load_full_schedule()
+        if week_num is None:
+            week_num = find_current_week(schedule, datetime.now(EASTERN), get_max_week())
+        if week_num is None:
+            await ctx.send("Could not determine the current week. Pass a week number.")
+            return
+
+        week_games = schedule.get(str(week_num))
+        if not week_games:
+            await ctx.send(f"No games found for Week {week_num}.")
+            return
+
+        if config["active"]:
+            await db.end_survivor_game(season, guild_id, week_num, END_RESET, [])
+
+        old_session = config["session"]
+        players = len(await db.get_all_survivor_players(season, guild_id))
+        new_session = await db.reset_survivor_game(
+            season, guild_id, ctx.channel.id, week_num
+        )
+        self.survivor_channel_ids.add(ctx.channel.id)
+        self._msg_cache.clear()
+
+        logger.info(
+            f"[SURVIVOR] Guild {guild_id} reset: session {old_session} archived "
+            f"({players} players), session {new_session} starts Week {week_num}"
+        )
         await ctx.send(
-            f"**Survivor Config**\n"
-            f"Channel: {ch_name}\n"
-            f"Start week: {config['start_week']}\n"
-            f"Season: {config['season']}\n"
-            f"Total enrolled: {len(all_players)}\n"
-            f"Still alive: {len(alive)}"
+            f"**Survivor reset.** Session {old_session} is archived "
+            f"({players} player(s)) and session {new_session} starts in Week "
+            f"{week_num}. Everyone is out and every team is available again, so "
+            f"react below to join."
+        )
+
+        await self.post_survivor_matchups(ctx.channel, week_num, week_games)
+
+    @commands.command(name=CMD_SURVIVOR_REOPEN)
+    @commands.has_permissions(administrator=True)
+    async def survivor_reopen(self, ctx):
+        """Undo an ending, for when a game ended on bad data.
+
+        Usage: !survivor_reopen
+
+        Reactivates the game and drops this session's winners. Player status is
+        untouched: an ending is usually wrong because the week was processed
+        against the wrong winners, and the fix for that is to correct them and
+        re-run `!survivor_process <week>`.
+        """
+        db = get_db()
+        guild_id = str(ctx.guild.id)
+
+        config = await db.get_survivor_config(guild_id)
+        if not config:
+            await ctx.send("Survivor is not configured here.")
+            return
+        if config["active"]:
+            await ctx.send("Survivor is already running here.")
+            return
+
+        ended_week = config["ended_week"]
+        await db.reopen_survivor_game(guild_id)
+        self.survivor_channel_ids.add(config["channel_id"])
+
+        logger.info(f"[SURVIVOR] Guild {guild_id} reopened (was ended Week {ended_week})")
+        await ctx.send(
+            f"Survivor reopened. The Week {ended_week} ending and its winners are "
+            f"cleared. Player eliminations are unchanged: fix the week's winners "
+            f"and re-run `!survivor_process {ended_week}` if that is what went wrong."
         )
 
     @commands.command(name=CMD_SURVIVOR_ALLPICKS)
