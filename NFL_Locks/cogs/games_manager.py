@@ -4,7 +4,7 @@ from discord.ext import commands, tasks
 import discord
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from NFL_Locks.utils.constants import EASTERN, NFL_TEAMS
 from NFL_Locks.utils.data_utils import load_full_schedule
 from NFL_Locks.utils.time_utils import get_week_deadline, is_deadline_passed
@@ -15,6 +15,7 @@ from NFL_Locks.utils.database import get_db
 from NFL_Locks.utils.command_names import CMD_POST_GAMES, CMD_REPOST_GAMES
 from NFL_Locks.utils.rate_limiter import rate_limiter
 from NFL_Locks.utils.channel_lock import locked_channel
+from NFL_Locks.utils.config import MATCHUP_POST_FALLBACK_HOURS
 
 logger = logging.getLogger('cogs.games_manager')
 
@@ -102,6 +103,60 @@ class GamesManager(commands.Cog):
         if not guilds_needing_games:
             logger.debug(f"Week {current_week} games already posted to all guilds")
             return
+
+        # Hold until last week's results are out for that guild.
+        #
+        # The week flips at WEEK_BOUNDARY_HOUR (3 AM Tuesday) but the weekly
+        # routine does not run until RESULTS_POST_HOUR, so this used to post the
+        # new slate five hours before anyone saw who won the old one. The
+        # routine posts the matchups itself as one of its steps, so in the
+        # normal case this gate simply lets it do that and both land together.
+        # This loop stays as the safety net for Week 1 (no previous week), for a
+        # guild configured mid-week, and for a routine that failed outright.
+        #
+        # is_weekly_routine_posted is the right flag rather than
+        # is_results_posted: it is only set after every step of the routine has
+        # run for that guild.
+        deadline = get_week_deadline(current_week)
+        past_fallback = bool(
+            deadline
+            and now >= deadline - timedelta(hours=MATCHUP_POST_FALLBACK_HOURS)
+        )
+        prev_week = current_week - 1
+
+        if prev_week >= 1 and not past_fallback:
+            waiting = []
+            for gid in list(guilds_needing_games):
+                if not await db.is_weekly_routine_posted(season, prev_week, str(gid)):
+                    guilds_needing_games.remove(gid)
+                    waiting.append(gid)
+            if waiting:
+                logger.info(
+                    f"Week {current_week} matchups held for {len(waiting)} guild(s) "
+                    f"until Week {prev_week} results post"
+                )
+
+        if not guilds_needing_games:
+            return
+
+        if prev_week >= 1 and past_fallback:
+            stuck = [
+                gid for gid in guilds_needing_games
+                if not await db.is_weekly_routine_posted(season, prev_week, str(gid))
+            ]
+            if stuck:
+                logger.error(
+                    f"Week {prev_week} routine never completed for {len(stuck)} guild(s); "
+                    f"posting Week {current_week} matchups anyway, deadline is close"
+                )
+                from BotUtils.notify import notify_admin
+                await notify_admin(
+                    self.bot,
+                    f"**Week {current_week} matchups posted without Week {prev_week} "
+                    f"results** in {len(stuck)} server(s). The weekly routine never "
+                    f"finished there and the deadline is close, so the week was opened "
+                    f"anyway. Check winners for Week {prev_week}."
+                )
 
         logger.info(
             f"Week {current_week} games need posting to {len(guilds_needing_games)} guild(s)"

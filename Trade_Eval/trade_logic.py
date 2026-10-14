@@ -74,7 +74,7 @@ def parse_pick(token: str):
         years_out = year_full - config.CURRENT_DRAFT_YEAR
 
         # Sanity check - can't be in the past or too far future
-        if years_out < 1 or years_out > 3:
+        if years_out < 0 or years_out > 3:
             return None
 
         overall = _round_mid_pick(round_num)

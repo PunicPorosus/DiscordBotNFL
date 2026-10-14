@@ -162,10 +162,10 @@ class TradeEval(commands.Cog):
 
     # -- Auto sync task -----------------------------------------------------
 
-    @tasks.loop(hours=1)
+    @tasks.loop(time=config.AUTO_SYNC_TIME)
     async def auto_sync_task(self):
         """
-        Runs every hour and fires syncs at 3 AM Eastern.
+        Fires once a day at AUTO_SYNC_HOUR Eastern.
 
         Mock (Feb-Mar): daily sync from Google Sheets.
         Locks (Sep-Jan): nightly recompute from NFL Locks week file data.
@@ -176,8 +176,9 @@ class TradeEval(commands.Cog):
         """
         now = now_eastern()
 
-        # Only act at 3 AM to keep sync times predictable
-        if now.hour != 3:
+        # Redundant now that the loop is pinned to AUTO_SYNC_TIME, kept as a
+        # guard so a manual call or a schedule change cannot sync at noon.
+        if now.hour != config.AUTO_SYNC_HOUR:
             return
 
         # Mock offseason: daily during February and March

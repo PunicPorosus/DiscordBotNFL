@@ -7,6 +7,7 @@ Dynamic scheduling system that posts results the morning after the last game.
 
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta
+from NFL_Locks.utils.config import RESULTS_POST_TIMES
 from NFL_Locks.utils.constants import EASTERN
 from NFL_Locks.utils.data_utils import load_full_schedule
 from NFL_Locks.utils.schedule_utils import get_max_week, get_current_season
@@ -158,11 +159,17 @@ class AutoTasks(commands.Cog):
 
     # -- Main task -------------------------------------------------------------
 
-    @tasks.loop(hours=1)
+    @tasks.loop(time=RESULTS_POST_TIMES)
     async def dynamic_weekly_tasks(self):
         """
-        Check every hour whether any week is ready for results posting.
-        Only runs within the 7 to 10 AM posting window.
+        Check whether any week is ready for results posting.
+
+        Fires at each of RESULTS_POST_TIMES (7, 8 and 9 AM ET). This used to be
+        an hourly interval loop, which anchors to process start: results landed
+        at whatever minute the bot was last restarted on, and moved on every
+        deploy. The hour guard below is now redundant but kept, because a manual
+        call or a future schedule change should not be able to post results at
+        midnight.
         """
         try:
             now = datetime.now(EASTERN)
@@ -265,6 +272,11 @@ class AutoTasks(commands.Cog):
 
         except Exception as e:
             logger.error(f"Error in dynamic_weekly_tasks: {e}", exc_info=True)
+
+    @dynamic_weekly_tasks.before_loop
+    async def _before_dynamic_weekly_tasks(self):
+        """Guilds and channels are not resolvable until the bot is ready."""
+        await self.bot.wait_until_ready()
 
     # -- Delegate helpers ------------------------------------------------------
 

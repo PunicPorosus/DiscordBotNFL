@@ -11,6 +11,10 @@ which reads the loaded schedule metadata. If the NFL expands the season, the bot
 will log a warning at startup prompting you to update DEFAULT_MAX_WEEK here.
 """
 
+from datetime import time as _time
+
+from BotUtils.time import EASTERN
+
 # -- Season / Week -------------------------------------------------------------
 # Update this if the NFL expands the regular season (e.g. to 19 weeks).
 DEFAULT_MAX_WEEK = 18
@@ -28,6 +32,7 @@ RESULTS_POST_WINDOW_START = 7      # Earliest hour catchup will post results
 RESULTS_POST_WINDOW_END = 10       # Latest hour catchup will post results
 
 SCHEDULE_UPDATE_HOUR = 9           # Hour (ET) the schedule-update check runs
+
 SCHEDULE_UPDATE_MONTH = 8          # Month the schedule auto-update triggers (August)
 SCHEDULE_UPDATE_DAY = 15           # Day of month the schedule auto-update triggers
 SCHEDULE_RESET_MONTH = 1           # Month the "schedule updated" flag resets (January)
@@ -38,6 +43,28 @@ SEASON_ARCHIVE_DAY = 1             # Day of SCHEDULE_UPDATE_MONTH to auto-archiv
 
 WRAPUP_POST_WINDOW_DAYS = 8        # Days after final week during which wrapup may post
 LATE_NIGHT_THRESHOLD_HOUR = 22     # Hour (ET) after which games count as "late night"
+
+# -- Scheduled clock times (ET) ------------------------------------------------
+# Every task that fires at a FIXED time of day pins itself to one of these with
+# discord.py's @tasks.loop(time=...), which fires at the wall-clock time no
+# matter when the process started.
+#
+# An interval loop (@tasks.loop(hours=1)) anchors to process start instead, so
+# its ticks land wherever the last restart happened to be: results posted at
+# 8:30 because the bot came up at 8:30-something, and moved again on the next
+# deploy. Anything with a real clock time belongs here.
+#
+# These are timezone-aware, so the time holds across the daylight saving shift
+# rather than sliding an hour twice a year. Tasks that hunt a MOVING target
+# (kickoff, the pre-deadline window, the nudge window) are not scheduled times:
+# they stay on short interval polling, because what they watch for moves week to
+# week.
+RESULTS_POST_TIMES = [
+    _time(hour, 0, tzinfo=EASTERN)
+    for hour in range(RESULTS_POST_WINDOW_START, RESULTS_POST_WINDOW_END)
+]  # 7, 8 and 9 AM ET: the 8 AM post plus two retries if a run fails or the bot was down
+
+SCHEDULE_UPDATE_TIME = _time(SCHEDULE_UPDATE_HOUR, 0, tzinfo=EASTERN)
 
 # -- Background Task Intervals -------------------------------------------------
 LOCK_CHECK_INTERVAL_MIN = 5        # How often the lock-time checker runs (minutes)
@@ -94,6 +121,14 @@ WEEK_BOUNDARY_HOUR = 3
 # away. A survivor week that never opens eliminates every player for no pick,
 # which is far worse than results and matchups landing out of order.
 SURVIVOR_POST_FALLBACK_HOURS = 36
+
+# -- Matchup posting -----------------------------------------------------------
+# The week flips at WEEK_BOUNDARY_HOUR, but the previous week's results do not
+# post until the Tuesday routine runs at RESULTS_POST_HOUR. Matchups wait for
+# that routine so both land together instead of five hours apart. If the routine
+# is stuck (winners never fetched, say), stop waiting once the deadline is this
+# many hours away: a week that never opens is worse than one posted early.
+MATCHUP_POST_FALLBACK_HOURS = 36
 
 # -- Pick nudges ---------------------------------------------------------------
 # A courtesy DM to players with no pick recorded, sent once per player per week.

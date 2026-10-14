@@ -17,13 +17,14 @@ Design decisions:
 import asyncio
 import os
 import sys
-from datetime import datetime, time
+from datetime import datetime
 from pathlib import Path
 from discord.ext import commands, tasks
 
 from NFL_Locks.utils.constants import EASTERN
 from NFL_Locks.utils.config import (
     SCHEDULE_UPDATE_HOUR,
+    SCHEDULE_UPDATE_TIME,
     SCHEDULE_UPDATE_MONTH,
     SCHEDULE_UPDATE_DAY,
     SCHEDULE_RESET_MONTH,
@@ -32,9 +33,6 @@ from NFL_Locks.utils.config import (
     SEASON_ARCHIVE_DAY,
 )
 from NFL_Locks.utils.command_names import CMD_UPDATE_SCHEDULE_NOW, CMD_CHECK_SCHEDULE_STATUS
-
-
-_TRIGGER_TIME = time(SCHEDULE_UPDATE_HOUR, 0, tzinfo=EASTERN)
 
 
 class ScheduleUpdater(commands.Cog):
@@ -51,7 +49,7 @@ class ScheduleUpdater(commands.Cog):
 
     # -- Main task -------------------------------------------------------------
 
-    @tasks.loop(time=_TRIGGER_TIME)
+    @tasks.loop(time=SCHEDULE_UPDATE_TIME)
     async def check_schedule_update(self):
         """
         Fires once per day at SCHEDULE_UPDATE_HOUR ET.
