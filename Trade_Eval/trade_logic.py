@@ -83,12 +83,35 @@ def parse_pick(token: str):
         label = f"{year_full} R{round_num}"
         return (overall, years_out, label)
 
-    # Round.pick format (e.g. "5.176", "6.190")
+    # Round.pick format, two spellings of the same thing:
+    #   "5.176" round 5, OVERALL pick 176
+    #   "7.32"  round 7, the 32nd pick OF THAT ROUND (overall 224)
+    #
+    # The round digit used to be parsed and then thrown away, so "7.32" valued
+    # as overall pick 32 (a first rounder) and "2.16" as overall 16. Both are
+    # wildly wrong: on Johnson "7.32" was worth 590 points instead of 1.
+    #
+    # Disambiguated by comparing the number against the round's own starting
+    # pick: a number at or above it can only be an overall pick, a number below
+    # it can only be a count within the round. Real draft overalls drift past
+    # the idealized 32-pick rounds in ROUND_STARTS (comp picks), which is why
+    # the test is "at or above the round start" rather than "inside the round".
     m = _ROUND_PICK_RE.match(token)
     if m:
-        overall = int(m.group(2))
-        if 1 <= overall <= 257:
-            return (overall, 0, f"Pick {overall}")
+        round_num = int(m.group(1))
+        number = int(m.group(2))
+        start = trade_charts.ROUND_STARTS.get(round_num)
+        if start is None:
+            return None  # No round 0 or 8: "8.3" is a typo, not overall pick 3
+
+        if number < start:
+            overall = start + number - 1
+            if 1 <= overall <= 257:
+                return (overall, 0, f"R{round_num}.{number} (#{overall})")
+            return None
+
+        if 1 <= number <= 257:
+            return (number, 0, f"Pick {number}")
         return None
 
     # Raw overall pick number (e.g. "31")

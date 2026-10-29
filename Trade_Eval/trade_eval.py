@@ -239,6 +239,8 @@ class TradeEval(commands.Cog):
 
         Pick formats:
           31       -- overall pick number (current year)
+          7.32     -- round 7, 32nd pick of that round (overall 224)
+          5.176    -- round 5, overall pick 176
           +1R2     -- 1 year from now, Round 2 (year-agnostic relative format)
           +3R1     -- 3 years from now, Round 1 (max +3)
           27R2     -- 2027 Round 2 (absolute year format, must be after current year)
@@ -254,6 +256,8 @@ class TradeEval(commands.Cog):
                 "**Pick formats:**\n"
                 "• `31`: overall pick number\n"
                 "• `R3`: current year, mid-3rd-round pick\n"
+                "• `7.32`: round 7, 32nd pick of that round (overall 224)\n"
+                "• `5.176`: round 5, overall pick 176\n"
                 "• `+1R2`: 1 year from now, Round 2 (max +3)\n"
                 "• `27R2`: 2027 Round 2 (must be after current year)"
             )
@@ -304,6 +308,8 @@ class TradeEval(commands.Cog):
                 f"**Pick formats:**\n"
                 f"• `31`: overall pick number\n"
                 f"• `R3`: current year, mid-3rd-round pick\n"
+                f"• `7.32`: round 7, 32nd pick of that round (overall 224)\n"
+                f"• `5.176`: round 5, overall pick 176\n"
                 f"• `+1R2`: 1 year from now, Round 2 (max +3)\n"
                 f"• `{next_yy}R2`: {config.CURRENT_DRAFT_YEAR + 1} Round 2 (must be after {config.CURRENT_DRAFT_YEAR})"
             )
