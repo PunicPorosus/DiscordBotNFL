@@ -4,9 +4,15 @@ from NFL_Locks.utils.constants import NFL_TEAMS
 async def fetch_nfl_results(week_number: int, season: int | None = None):
     """Fetch completed-game results from ESPN's public API.
 
-    Returns {"winners": [abbr, ...], "completed": int, "listed": int} or None
-    on error. `completed` counts games ESPN marks finished; a tie is completed
-    but contributes no winner, so completeness must be judged on `completed`.
+    Returns {"winners": [abbr, ...], "ties": [[abbr, abbr], ...],
+    "completed": int, "listed": int} or None on error. `completed` counts games
+    ESPN marks finished; a tie is completed but contributes no winner, so
+    completeness must be judged on `completed`.
+
+    Ties are returned as their own list because the house rule records no
+    winner for a tied game, which makes a tie indistinguishable from an
+    unplayed game once only the winners list is stored. Standings built from
+    that lost the game entirely: both teams showed one fewer game played.
 
     Parameters
     ----------
@@ -32,6 +38,7 @@ async def fetch_nfl_results(week_number: int, season: int | None = None):
                 data = await response.json()
                 events = data.get("events", [])
                 winners = []
+                ties = []
                 completed = 0
                 for game in events:
                     status = game.get("status", {}).get("type", {})
@@ -39,13 +46,28 @@ async def fetch_nfl_results(week_number: int, season: int | None = None):
                         continue
                     completed += 1
                     comp = game.get("competitions", [{}])[0]
-                    for team in comp.get("competitors", []):
+                    competitors = comp.get("competitors", [])
+
+                    game_winner = None
+                    sides = []
+                    for team in competitors:
+                        abbr = team["team"].get("abbreviation", "")
+                        if abbr not in NFL_TEAMS:
+                            continue
+                        sides.append(abbr)
                         if team.get("winner", False):
-                            abbr = team["team"].get("abbreviation", "")
-                            if abbr in NFL_TEAMS:
-                                winners.append(abbr)
+                            game_winner = abbr
+
+                    if game_winner:
+                        winners.append(game_winner)
+                    elif len(sides) == 2:
+                        # Finished, both teams recognised, nobody marked the
+                        # winner: a tie.
+                        ties.append(sorted(sides))
+
                 return {
                     "winners": winners,
+                    "ties": ties,
                     "completed": completed,
                     "listed": len(events),
                 }

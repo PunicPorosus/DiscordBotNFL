@@ -148,6 +148,7 @@ class TradeEval(commands.Cog):
         # Weeks loaded by the last locks sync, {week: [winner abbrevs]}.
         # Lets the sync command print the record summary without a second read.
         self._last_locks_winners: dict = {}
+        self._last_locks_ties: dict = {}
 
     async def cog_load(self):
         """Async setup: open DB connection, load cache, start sync task."""
@@ -219,8 +220,9 @@ class TradeEval(commands.Cog):
         command can print the record summary without reading the DB twice.
         """
         try:
-            winners_by_week = await locks_order.load_winners_by_week()
+            winners_by_week, ties_by_week = await locks_order.load_results_by_week()
             self._last_locks_winners = winners_by_week
+            self._last_locks_ties = ties_by_week
 
             if not locks_order.has_results(winners_by_week):
                 # Without results every team is 0-0-0 and the "projection" is
@@ -230,7 +232,7 @@ class TradeEval(commands.Cog):
                 await self.db.update_sync_status("locks", "failed", error="No scored weeks")
                 return False
 
-            picks_by_team = locks_order.project_draft_order(winners_by_week)
+            picks_by_team = locks_order.project_draft_order(winners_by_week, ties_by_week)
             if not picks_by_team:
                 logger.warning("_sync_locks_order: project_draft_order returned empty dict")
                 await self.db.update_sync_status("locks", "failed", error="No data computed")
@@ -979,7 +981,9 @@ class TradeEval(commands.Cog):
             ok = await self._sync_locks_order()
             if ok:
                 self.draft_cache["locks"] = await self.cache_mgr.load_to_memory("locks")
-                lines = locks_order.record_summary(self._last_locks_winners)
+                lines = locks_order.record_summary(
+                    self._last_locks_winners, self._last_locks_ties
+                )
                 team_count = len(self.draft_cache["locks"])
                 # Show first 20 lines (non-playoff teams); playoff teams summarized
                 non_playoff_lines = [ln for ln in lines if "[NP]" in ln]

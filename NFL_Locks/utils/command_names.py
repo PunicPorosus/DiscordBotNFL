@@ -89,6 +89,7 @@ CMD_RESET_COOLDOWNS         = "reset_cooldowns"
 # -- winners.py ----------------------------------------------------------------
 CMD_FETCH_WINNERS           = "fetch_winners"
 CMD_SHOW_WINNERS            = "show_winners"
+CMD_BACKFILL_TIES           = "backfill_ties"
 
 # -- nudges.py -----------------------------------------------------------------
 CMD_NUDGE_PREVIEW           = "nudge_preview"

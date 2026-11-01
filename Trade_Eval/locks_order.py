@@ -13,14 +13,16 @@ those files any more, so the glob matched nothing, every team computed as
 alphabetical by name. A sync looked like it worked and produced a reverse
 alphabetical list.
 
-Tiebreaker order (applied within any tied group):
-  1. Overall win%
-  2. Head-to-head record within the tied group
-  3. Division record
-  4. Strength of schedule (SOS): approximation for remaining NFL tiebreakers
-     that require data not tracked by NFL Locks (head-to-head conference record,
-     common games, strength of victory, etc.)
-  5. Alphabetical on full team name (determinism)
+Tiebreakers live in nfl_tiebreakers.py, which implements the rulebook's two
+procedures (division ties and wild card ties) including the restart-after-each-
+club rule, the two-club reversion, the wild card division-elimination rule and
+the head-to-head sweep test. Draft order has its own sequence and uses
+_draft_rank() below, not the playoff procedures.
+
+The only steps not implemented are the point-based ones below strength of
+schedule (combined point rankings, net points, net touchdowns), which need
+per-game scores that NFL Locks does not store, and the coin toss, which is
+alphabetical here so a projection is stable between runs.
 
 Playoff format (since 2020):
   7 teams per conference: 4 division winners + 3 wild cards = 14 total.
@@ -31,6 +33,8 @@ Playoff format (since 2020):
 
 import logging
 from collections import defaultdict
+
+from Trade_Eval import nfl_tiebreakers
 
 logger = logging.getLogger("trade_eval.locks_order")
 
@@ -95,6 +99,16 @@ _DIV_MAP: dict[str, str] = {
     team: div for div, teams in DIVISIONS.items() for team in teams
 }
 
+# Conference membership: abbrev → "AFC"/"NFC". Derived from the division lists
+# rather than written out again, so realignment only ever has to be edited in
+# one place and the two cannot drift apart.
+_CONF_MAP: dict[str, str] = {
+    team: conf
+    for conf, div_names in (("AFC", AFC_DIVISIONS), ("NFC", NFC_DIVISIONS))
+    for div in div_names
+    for team in DIVISIONS[div]
+}
+
 
 # -- Record helpers ------------------------------------------------------------
 
@@ -127,7 +141,9 @@ def _add_tie(records: dict, team: str) -> None:
 
 # -- Single-pass stats computation ---------------------------------------------
 
-def _compute_all_stats(winners_by_week: dict) -> tuple[dict, dict, dict, dict]:
+def _compute_all_stats(
+    winners_by_week: dict, ties_by_week: "dict | None" = None
+) -> dict:
     """
     Walk every scored week once and compute:
 
@@ -135,19 +151,28 @@ def _compute_all_stats(winners_by_week: dict) -> tuple[dict, dict, dict, dict]:
     h2h, {(min_abbr, max_abbr): {wins_a, wins_b, ties}}
                          where wins_a = wins by the alphabetically-first team
     div_records, {abbr: {wins, losses, ties, games}} (same-division games only)
+    conf_records, {abbr: {wins, losses, ties, games}} (same-conference games only)
     opponents, {abbr: [opp_abbr, ...]} for all completed games (SOS input)
 
     winners_by_week, {week_number: [winning team abbrev, ...]} from the NFL
     Locks database. A week missing from the dict has not been scored yet.
 
-    Returns (overall_records, h2h, div_records, opponents).
-    All 32 teams are always present in every dict; zeros for teams with no games.
+    ties_by_week, {week_number: [[abbr, abbr], ...]}. A tied game records no
+    winner under the house rule, so it has to be passed separately or the game
+    is skipped entirely and both teams show one fewer game played.
+
+    Returns a stats bundle: overall, h2h, division, conference, opponents,
+    beaten, division_of, conference_of. All 32 teams are present in every
+    record dict; zeros for teams with no games. The bundle is what
+    nfl_tiebreakers.resolve() consumes.
     """
     from NFL_Locks.utils.data_utils import load_full_schedule
 
     schedule = load_full_schedule() or {}
     overall   = {a: _blank_record() for a in ALL_ABBREVS}
     div_recs  = {a: _blank_record() for a in ALL_ABBREVS}
+    conf_recs = {a: _blank_record() for a in ALL_ABBREVS}
+    beaten: dict[str, list[str]] = defaultdict(list)
     h2h: dict[tuple, dict] = {}
     opponents: dict[str, list[str]] = defaultdict(list)
 
@@ -157,8 +182,11 @@ def _compute_all_stats(winners_by_week: dict) -> tuple[dict, dict, dict, dict]:
         if not winners_list:
             continue  # Week not yet scored
 
-        winners  = set(winners_list)
-        matchups = schedule.get(str(week_num), [])
+        winners   = set(winners_list)
+        tied_pairs = {
+            tuple(sorted(pair)) for pair in (ties_by_week or {}).get(week_num, [])
+        }
+        matchups  = schedule.get(str(week_num), [])
         if not matchups:
             logger.warning("locks_order: no schedule entry for week %s", week_num)
             continue
@@ -176,10 +204,16 @@ def _compute_all_stats(winners_by_week: dict) -> tuple[dict, dict, dict, dict]:
                 winner, loser, is_tie = away, home, False
             elif home_won and not away_won:
                 winner, loser, is_tie = home, away, False
+            elif tuple(sorted((away, home))) in tied_pairs:
+                winner, loser, is_tie = away, home, True
             elif away_won and home_won:
-                winner, loser, is_tie = away, home, True   # treat as tie
+                winner, loser, is_tie = away, home, True   # defensive, should not occur
             else:
-                continue  # game not yet played
+                # Neither team won and the game is not a recorded tie. Could be
+                # postponed, or part of a week stored incomplete past the
+                # winners grace window. Deliberately NOT inferred as a tie:
+                # guessing here is what silently corrupts standings.
+                continue
 
             # -- Overall record --------------------------------------------
             if is_tie:
@@ -209,59 +243,44 @@ def _compute_all_stats(winners_by_week: dict) -> tuple[dict, dict, dict, dict]:
                     _add_win(div_recs, winner)
                     _add_loss(div_recs, loser)
 
+            # -- Conference record -----------------------------------------
+            # Every division game is also a conference game, so this is a
+            # superset of the division record above, not an alternative to it.
+            if _CONF_MAP.get(away) == _CONF_MAP.get(home) and _CONF_MAP.get(away) is not None:
+                if is_tie:
+                    _add_tie(conf_recs, away)
+                    _add_tie(conf_recs, home)
+                else:
+                    _add_win(conf_recs, winner)
+                    _add_loss(conf_recs, loser)
+
             # -- Opponents list (for SOS) ----------------------------------
             if away in ALL_ABBREVS:
                 opponents[away].append(home)
             if home in ALL_ABBREVS:
                 opponents[home].append(away)
 
+            # -- Teams beaten (for strength of victory) --------------------
+            # A tie counts as a victory for nobody, so neither club's list
+            # grows, which matches how the rulebook computes SOV.
+            if not is_tie and winner in ALL_ABBREVS:
+                beaten[winner].append(loser)
+
     played = sum(1 for r in overall.values() if r["games"] > 0)
     logger.info(
         "locks_order: stats computed over %d weeks, %d teams have played games",
         len(weeks), played,
     )
-    return overall, h2h, div_recs, dict(opponents)
-
-
-def _compute_sos(overall: dict, opponents: dict) -> dict[str, float]:
-    """
-    Compute each team's opponents' average win% (strength of schedule proxy).
-    Returns {abbr: avg_opponent_win_pct}.
-    """
-    sos: dict[str, float] = {}
-    for abbr in ALL_ABBREVS:
-        opp_list = opponents.get(abbr, [])
-        if not opp_list:
-            sos[abbr] = 0.0
-        else:
-            sos[abbr] = sum(
-                _win_pct(overall.get(opp, _blank_record())) for opp in opp_list
-            ) / len(opp_list)
-    return sos
-
-
-# -- Tiebreaker ranking --------------------------------------------------------
-
-def _h2h_win_pct(team: str, group: list[str], h2h: dict) -> float:
-    """
-    H2H win% of team against all other members of group.
-    Returns 0.5 if no games have been played within the group.
-    """
-    wins = losses = ties = 0
-    for opp in group:
-        if opp == team:
-            continue
-        key = (min(team, opp), max(team, opp))
-        data = h2h.get(key, {})
-        if team <= opp:   # team is the "a" key
-            wins   += data.get("wins_a", 0)
-            losses += data.get("wins_b", 0)
-        else:             # team is the "b" key
-            wins   += data.get("wins_b", 0)
-            losses += data.get("wins_a", 0)
-        ties += data.get("ties", 0)
-    total = wins + losses + ties
-    return (wins + 0.5 * ties) / total if total > 0 else 0.5
+    return {
+        "overall": overall,
+        "h2h": h2h,
+        "division": div_recs,
+        "conference": conf_recs,
+        "opponents": dict(opponents),
+        "beaten": dict(beaten),
+        "division_of": _DIV_MAP,
+        "conference_of": _CONF_MAP,
+    }
 
 
 def _group_by_value(items: list, key_fn) -> list[list]:
@@ -280,112 +299,98 @@ def _group_by_value(items: list, key_fn) -> list[list]:
     return [g[1] for g in groups]
 
 
-def _rank_teams(
-    teams: list[str],
-    overall: dict,
-    h2h: dict,
-    div_recs: dict,
-    sos: dict,
-) -> list[str]:
-    """
-    Rank teams best-to-worst using the NFL tiebreaker sequence:
-      1. Overall win%
-      2. Head-to-head within tied group
-      3. Division record
-      4. SOS (proxy for remaining NFL tiebreakers)
-      5. Alphabetical (determinism)
-
-    The h2h tiebreaker is applied strictly within each tied subset, teams at
-    different win% levels never influence each other's h2h calculation.
-
-    Returns a list ordered best → worst (highest win% first).
-    """
-    if len(teams) <= 1:
-        return list(teams)
-
-    result: list[str] = []
-
-    # Stage 1: group by overall win%
-    for win_group in _group_by_value(teams, lambda a: _win_pct(overall.get(a, _blank_record()))):
-        if len(win_group) == 1:
-            result.extend(win_group)
-            continue
-
-        # Stage 2: h2h within THIS win% group
-        for h2h_group in _group_by_value(win_group, lambda a: _h2h_win_pct(a, win_group, h2h)):
-            if len(h2h_group) == 1:
-                result.extend(h2h_group)
-                continue
-
-            # Stage 3: division record
-            for div_group in _group_by_value(h2h_group, lambda a: _win_pct(div_recs.get(a, _blank_record()))):
-                if len(div_group) == 1:
-                    result.extend(div_group)
-                    continue
-
-                # Stage 4: SOS (higher = harder schedule = better for seeding)
-                for sos_group in _group_by_value(div_group, lambda a: sos.get(a, 0.0)):
-                    if len(sos_group) == 1:
-                        result.extend(sos_group)
-                        continue
-
-                    # Stage 5: alphabetical (always deterministic)
-                    result.extend(sorted(sos_group))
-
-    return result
-
-
 # -- Playoff field construction ------------------------------------------------
 
-def _identify_division_winner(
-    div_teams: list[str], overall: dict, h2h: dict, div_recs: dict, sos: dict
-) -> str:
-    """Return the current division leader using full tiebreaker order."""
-    ranked = _rank_teams(div_teams, overall, h2h, div_recs, sos)
-    return ranked[0]
-
-
-def identify_playoff_teams(
-    overall: dict, h2h: dict, div_recs: dict, sos: dict
-) -> tuple[set[str], set[str]]:
+def identify_playoff_teams(stats: dict) -> "tuple[set, set]":
     """
-    Build the current playoff field using full tiebreaker ranking.
+    Build the current playoff field: 4 division winners + 3 wild cards per
+    conference = 14 teams.
 
-    Format: 4 division winners + 3 wild cards per conference = 14 total.
-    Wild cards are the 3 best non-division-winner records in the conference,
-    broken by the same tiebreaker sequence (h2h within tied WC group, then
-    division record, then SOS).
+    Division winners are decided by the DIVISION procedure and wild cards by
+    the WILD CARD procedure. Those are different step orders, and using the
+    division order for wild cards (which this did before) gets the last wild
+    card wrong whenever two tied clubs have different conference records: that
+    single call decides whether a team picks in the 1-18 range or the 19-32
+    range, which is the largest error this projection can make.
 
     Returns (playoff_teams, non_playoff_teams) as sets of abbreviations.
     """
-    playoff: set[str] = set()
+    playoff: set = set()
 
     for conf_divisions in (AFC_DIVISIONS, NFC_DIVISIONS):
-        # Division winners
-        div_winners: set[str] = set()
+        div_winners: set = set()
         for div_name in conf_divisions:
-            winner = _identify_division_winner(DIVISIONS[div_name], overall, h2h, div_recs, sos)
-            div_winners.add(winner)
+            ranked = nfl_tiebreakers.resolve(
+                DIVISIONS[div_name], nfl_tiebreakers.DIVISION, stats
+            )
+            div_winners.add(ranked[0])
 
         playoff.update(div_winners)
 
-        # Wild cards, best remaining teams in conference
         conf_teams = [t for div in conf_divisions for t in DIVISIONS[div]]
         wc_candidates = [t for t in conf_teams if t not in div_winners]
-        ranked_wc = _rank_teams(wc_candidates, overall, h2h, div_recs, sos)
+        ranked_wc = nfl_tiebreakers.resolve(
+            wc_candidates, nfl_tiebreakers.WILD_CARD, stats
+        )
         playoff.update(ranked_wc[:WILD_CARD_SPOTS])
 
     non_playoff = set(ALL_ABBREVS) - playoff
     return playoff, non_playoff
 
 
-# -- Draft order projection ----------------------------------------------------
+# -- Draft order ---------------------------------------------------------------
 
-async def load_winners_by_week() -> dict[int, list[str]]:
+def _draft_rank(teams: "list[str]", stats: dict) -> list:
+    """Order teams WORST first, by the draft selection rules.
+
+    The draft has its own tiebreaker, which is not the playoff procedure:
+    clubs with identical records are ordered by strength of schedule, the club
+    with the LOWEST strength of schedule picking first. Clubs still tied are
+    separated by the division procedure when they share a division, the wild
+    card (conference) procedure when they share a conference, and a coin toss
+    otherwise, which is alphabetical here so projections stay stable.
+    """
+    groups = _group_by_value(
+        list(teams), lambda t: _win_pct(stats["overall"].get(t, _blank_record()))
+    )
+
+    ordered: list = []
+    for group in reversed(groups):      # worst win% first
+        if len(group) == 1:
+            ordered.extend(group)
+            continue
+
+        for sos_group in reversed(_group_by_value(
+            group, lambda t: nfl_tiebreakers._combined_pct(
+                stats["opponents"].get(t, []), stats
+            )
+        )):                              # lowest SOS first
+            if len(sos_group) == 1:
+                ordered.extend(sos_group)
+                continue
+
+            divisions = {stats["division_of"].get(t) for t in sos_group}
+            conferences = {stats["conference_of"].get(t) for t in sos_group}
+            if len(divisions) == 1:
+                scope = nfl_tiebreakers.DIVISION
+            elif len(conferences) == 1:
+                scope = nfl_tiebreakers.WILD_CARD
+            else:
+                ordered.extend(sorted(sos_group))
+                continue
+
+            # resolve() ranks best first; the worst club picks first.
+            ordered.extend(reversed(nfl_tiebreakers.resolve(sos_group, scope, stats)))
+
+    return ordered
+
+
+async def load_results_by_week() -> tuple[dict, dict]:
     """Read every scored week of the current season from the NFL Locks DB.
 
-    The NFL Locks DB singleton is connected once in bot.py before extensions
-    load, so this only ever reads an already-open connection.
+    Returns (winners_by_week, ties_by_week). The NFL Locks DB singleton is
+    connected once in bot.py before extensions load, so this only ever reads an
+    already-open connection.
     """
     from NFL_Locks.utils.database import get_db
     from NFL_Locks.utils.schedule_utils import get_current_season, get_max_week
@@ -393,67 +398,78 @@ async def load_winners_by_week() -> dict[int, list[str]]:
     db = get_db()
     season = get_current_season()
     winners_by_week: dict[int, list[str]] = {}
+    ties_by_week: dict[int, list] = {}
 
     for week in range(1, get_max_week() + 1):
         winners = await db.get_winners(season, week)
         if winners:
             winners_by_week[week] = winners
+            ties = await db.get_ties(season, week)
+            if ties:
+                ties_by_week[week] = ties
 
     logger.info(
-        "locks_order: loaded %d scored week(s) for season %s",
-        len(winners_by_week), season,
+        "locks_order: loaded %d scored week(s), %d with ties, for season %s",
+        len(winners_by_week), len(ties_by_week), season,
     )
-    return winners_by_week
+    return winners_by_week, ties_by_week
 
 
-def project_draft_order(winners_by_week: dict) -> dict[str, list[int]]:
+def project_draft_order(
+    winners_by_week: dict, ties_by_week: "dict | None" = None
+) -> dict[str, list[int]]:
     """
     Compute all stats from NFL Locks results and project next year's draft order.
 
-    Non-playoff teams (18): picks 1–18, worst team gets pick 1.
-    Playoff teams (14):     picks 19–32, worst playoff team (by seeding) gets 19.
+    Non-playoff teams (18): picks 1-18, worst team picks first.
+    Playoff teams (14):     picks 19-32, estimated by seeding.
 
-    Both groups use the same tiebreaker sequence. Playoff team order is an
-    estimate (assumes worse seeding = earlier exit = earlier pick). Use
-    !trade.picks.set locks to confirm once the NFL finalizes post-season picks.
+    Non-playoff order follows the DRAFT selection rules (record, then lowest
+    strength of schedule, then the division or conference procedure), not the
+    playoff tiebreakers: the draft has its own sequence and using the playoff
+    one ordered tied teams by the wrong key.
+
+    Playoff order remains an estimate, since the real picks 19-32 depend on how
+    far each club goes in January. Confirm with !trade.picks.set locks.
 
     Returns {full_team_name: [pick_number]}.
     """
-    overall, h2h, div_recs, opponents = _compute_all_stats(winners_by_week)
-    sos = _compute_sos(overall, opponents)
-    playoff_teams, non_playoff_teams = identify_playoff_teams(overall, h2h, div_recs, sos)
+    stats = _compute_all_stats(winners_by_week, ties_by_week)
+    playoff_teams, non_playoff_teams = identify_playoff_teams(stats)
 
-    # Rank each group best-to-worst; reverse for draft order (worst = earliest pick)
-    ranked_non_playoff = _rank_teams(list(non_playoff_teams), overall, h2h, div_recs, sos)
-    ranked_playoff     = _rank_teams(list(playoff_teams),     overall, h2h, div_recs, sos)
+    # Worst first: pick 1 is the worst non-playoff club.
+    draft_non_playoff = _draft_rank(list(non_playoff_teams), stats)
+    draft_playoff     = _draft_rank(list(playoff_teams), stats)
 
-    # Worst team → pick 1; best non-playoff team → pick 18
     result: dict[str, list[int]] = {}
-    for i, abbr in enumerate(reversed(ranked_non_playoff)):
+    for i, abbr in enumerate(draft_non_playoff):
         result[ABBREV_TO_FULL[abbr]] = [i + 1]
-    offset = len(ranked_non_playoff)
-    for i, abbr in enumerate(reversed(ranked_playoff)):
+    offset = len(draft_non_playoff)
+    for i, abbr in enumerate(draft_playoff):
         result[ABBREV_TO_FULL[abbr]] = [offset + i + 1]
 
     logger.info(
         "locks_order: projected %d non-playoff (picks 1-%d) + %d playoff (picks %d-%d)",
-        len(ranked_non_playoff), len(ranked_non_playoff),
-        len(ranked_playoff),
+        len(draft_non_playoff), len(draft_non_playoff),
+        len(draft_playoff),
         offset + 1,
-        offset + len(ranked_playoff),
+        offset + len(draft_playoff),
     )
     return result
 
 
 # -- Publicly exported helpers -------------------------------------------------
 
-def compute_team_records(winners_by_week: dict) -> dict[str, dict]:
+def compute_team_records(
+    winners_by_week: dict, ties_by_week: "dict | None" = None
+) -> dict[str, dict]:
     """Return overall W-L-T records for all 32 teams. Convenience wrapper."""
-    overall, _, _, _ = _compute_all_stats(winners_by_week)
-    return overall
+    return _compute_all_stats(winners_by_week, ties_by_week)["overall"]
 
 
-def record_summary(winners_by_week: dict) -> list[str]:
+def record_summary(
+    winners_by_week: dict, ties_by_week: "dict | None" = None
+) -> list[str]:
     """
     Compute full stats, project draft order, and return one line per team.
 
@@ -463,11 +479,11 @@ def record_summary(winners_by_week: dict) -> list[str]:
 
     [NP] = non-playoff projected  [PL] = playoff projected
     """
-    overall, h2h, div_recs, opponents = _compute_all_stats(winners_by_week)
-    sos = _compute_sos(overall, opponents)
-    playoff_teams, _ = identify_playoff_teams(overall, h2h, div_recs, sos)
+    stats = _compute_all_stats(winners_by_week, ties_by_week)
+    overall = stats["overall"]
+    playoff_teams, _ = identify_playoff_teams(stats)
 
-    order = project_draft_order(winners_by_week)
+    order = project_draft_order(winners_by_week, ties_by_week)
     pick_by_full = {full: picks[0] for full, picks in order.items()}
 
     lines: list[str] = []

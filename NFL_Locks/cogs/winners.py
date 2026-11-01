@@ -7,7 +7,11 @@ from NFL_Locks.utils.data_utils import load_full_schedule
 from NFL_Locks.utils.espn_api import fetch_nfl_results
 from NFL_Locks.utils.schedule_utils import get_max_week, get_current_week_info, get_current_season
 from NFL_Locks.utils.database import get_db
-from NFL_Locks.utils.command_names import CMD_FETCH_WINNERS, CMD_SHOW_WINNERS
+from NFL_Locks.utils.command_names import (
+    CMD_FETCH_WINNERS,
+    CMD_SHOW_WINNERS,
+    CMD_BACKFILL_TIES,
+)
 from NFL_Locks.utils.config import WINNERS_INCOMPLETE_GRACE_HOURS
 from BotUtils.notify import notify_admin
 
@@ -135,6 +139,7 @@ class Winners(commands.Cog):
             return None
 
         winners = results["winners"]
+        ties = results.get("ties") or []
         expected_games = len(week_games)
         complete = results["completed"] >= expected_games
 
@@ -170,7 +175,12 @@ class Winners(commands.Cog):
             logger.warning(f"No winners returned by ESPN for week {week_num}")
             return None
 
-        await db.set_winners(season, week_num, winners)
+        await db.set_winners(season, week_num, winners, ties)
+        if ties:
+            logger.info(
+                f"Week {week_num} had {len(ties)} tie(s): "
+                + ", ".join(" vs ".join(pair) for pair in ties)
+            )
         if complete:
             # Only a fully finished week is banked as final; anything else stays
             # eligible for re-fetch on the next pass.
@@ -209,6 +219,78 @@ class Winners(commands.Cog):
                 f"❌ Could not fetch winners for Week {week_num}. "
                 f"The week may not have ended yet."
             )
+
+    @commands.command(name=CMD_BACKFILL_TIES)
+    @commands.has_permissions(administrator=True)
+    async def backfill_ties(self, ctx, week_num: int = None):
+        """Re-read ESPN for weeks already stored and fill in their tied games.
+
+        Usage: !backfill_ties [week]
+        Omit the week to do every week that already has winners stored.
+
+        Ties were not recorded before this existed, so a tied game looked like
+        a game nobody played and both teams lost it from their record. Winners
+        already in the DB are preserved exactly, including any corrected by
+        hand with !set_winners: only the ties column is written.
+        """
+        db = get_db()
+        season = get_current_season()
+
+        if week_num is not None:
+            if not (1 <= week_num <= get_max_week()):
+                await ctx.send(f"Week number must be between 1 and {get_max_week()}.")
+                return
+            weeks = [week_num]
+        else:
+            weeks = [
+                w for w in range(1, get_max_week() + 1)
+                if await db.has_winners(season, w)
+            ]
+
+        if not weeks:
+            await ctx.send("No weeks have winners stored yet.")
+            return
+
+        await ctx.send(f"Checking {len(weeks)} week(s) against ESPN for ties...")
+
+        found = []
+        failed = []
+        for w in weeks:
+            stored = await db.get_winners(season, w)
+            if not stored:
+                continue
+            try:
+                results = await asyncio.wait_for(
+                    fetch_nfl_results(w, season=season), timeout=8
+                )
+            except Exception as e:
+                logger.error(f"backfill_ties: week {w} fetch failed: {e}")
+                failed.append(w)
+                continue
+
+            if not results:
+                failed.append(w)
+                continue
+
+            ties = results.get("ties") or []
+            # Re-store the winners we already had, never ESPN's, so a manual
+            # correction is not silently reverted by a backfill.
+            await db.set_winners(season, w, stored, ties)
+            if ties:
+                found.append((w, ties))
+            await asyncio.sleep(1)
+
+        lines = []
+        if found:
+            for w, ties in found:
+                for pair in ties:
+                    lines.append(f"Week {w}: {pair[0]} vs {pair[1]}")
+        else:
+            lines.append("No ties found.")
+        if failed:
+            lines.append(f"Could not check week(s): {', '.join(str(w) for w in failed)}")
+
+        await ctx.send("\n".join(lines)[:1900])
 
     @commands.command(name=CMD_SHOW_WINNERS)
     @commands.has_permissions(administrator=True)

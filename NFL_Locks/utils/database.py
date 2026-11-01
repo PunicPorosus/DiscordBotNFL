@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS week_results (
     season          INTEGER NOT NULL,
     week            INTEGER NOT NULL,
     winning_teams   TEXT    NOT NULL,  -- JSON array of team abbreviations
+    tied_teams      TEXT,              -- JSON array of [abbr, abbr] pairs
     PRIMARY KEY (season, week)
 );
 
@@ -297,6 +298,7 @@ class NFLLocksDB:
             "ALTER TABLE guild_config ADD COLUMN guild_name TEXT",
             "ALTER TABLE guild_config ADD COLUMN scoring_scheme TEXT NOT NULL DEFAULT 'all_or_nothing'",
             "ALTER TABLE week_guild_status ADD COLUMN reconciliation_failed INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE week_results ADD COLUMN tied_teams TEXT",
             "ALTER TABLE survivor_config ADD COLUMN session INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE survivor_config ADD COLUMN ended_week INTEGER",
             "ALTER TABLE survivor_config ADD COLUMN ended_reason TEXT",
@@ -567,14 +569,56 @@ class NFLLocksDB:
 
     # -- Winners / Results --------------------------------------------------
 
-    async def set_winners(self, season: int, week: int, winning_teams: list[str]):
-        """Store (or replace) the winning teams for a week."""
-        await self._conn.execute(
-            """INSERT OR REPLACE INTO week_results (season, week, winning_teams)
-               VALUES (?, ?, ?)""",
-            (season, week, json.dumps(winning_teams)),
-        )
+    async def set_winners(
+        self,
+        season: int,
+        week: int,
+        winning_teams: list[str],
+        tied_teams: "list[list[str]] | None" = None,
+    ):
+        """Store (or replace) the winning teams for a week, and any ties.
+
+        tied_teams is a list of [abbr, abbr] pairs. A tie produces no winner
+        under the house rule, so without recording the pair there is no way to
+        tell a tied game from one that was never played: standings built from
+        the winners list alone simply lost the game.
+
+        Passing None leaves any ties already stored for the week alone, so an
+        older caller that only knows about winners cannot wipe them.
+        """
+        if tied_teams is None:
+            await self._conn.execute(
+                """INSERT INTO week_results (season, week, winning_teams)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(season, week) DO UPDATE SET
+                       winning_teams=excluded.winning_teams""",
+                (season, week, json.dumps(winning_teams)),
+            )
+        else:
+            await self._conn.execute(
+                """INSERT INTO week_results (season, week, winning_teams, tied_teams)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(season, week) DO UPDATE SET
+                       winning_teams=excluded.winning_teams,
+                       tied_teams=excluded.tied_teams""",
+                (season, week, json.dumps(winning_teams), json.dumps(tied_teams)),
+            )
         await self._conn.commit()
+
+    async def get_ties(self, season: int, week: int) -> "list[list[str]]":
+        """Tied games for a week as [[abbr, abbr], ...]. Empty when none."""
+        async with self._conn.execute(
+            "SELECT tied_teams FROM week_results WHERE season=? AND week=?",
+            (season, week),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row or not row["tied_teams"]:
+            return []
+        try:
+            return json.loads(row["tied_teams"])
+        except (ValueError, TypeError):
+            logger.error(f"Bad tied_teams JSON for season {season} week {week}")
+            return []
 
     async def get_winners(self, season: int, week: int) -> list[str] | None:
         """Winning teams for a week, or None if not yet stored."""
