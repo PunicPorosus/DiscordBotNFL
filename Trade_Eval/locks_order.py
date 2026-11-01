@@ -1,9 +1,17 @@
 """
 Derives NFL projected draft order from NFL Locks game result data.
 
-Reads per-week JSON files from NFL_Locks (NFL_Locks/data/<year>/weekN.json),
-computes records for all 32 teams in a single pass, and projects next year's
-draft order using proper NFL playoff structure and tiebreakers.
+Reads weekly results from the NFL Locks database (week_results) and the
+schedule from full_schedule.json, computes records for all 32 teams in a single
+pass, and projects next year's draft order using proper NFL playoff structure
+and tiebreakers.
+
+This used to read per-week JSON files (NFL_Locks/data/<year>/weekN.json) via
+data_utils.get_all_week_files(). Results moved to SQLite and nothing writes
+those files any more, so the glob matched nothing, every team computed as
+0-0-0, and the draft order fell through every tiebreaker to the last one,
+alphabetical by name. A sync looked like it worked and produced a reverse
+alphabetical list.
 
 Tiebreaker order (applied within any tied group):
   1. Overall win%
@@ -119,9 +127,9 @@ def _add_tie(records: dict, team: str) -> None:
 
 # -- Single-pass stats computation ---------------------------------------------
 
-def _compute_all_stats() -> tuple[dict, dict, dict, dict]:
+def _compute_all_stats(winners_by_week: dict) -> tuple[dict, dict, dict, dict]:
     """
-    Read all scored NFL Locks week files in a single pass and compute:
+    Walk every scored week once and compute:
 
     overall_records, {abbr: {wins, losses, ties, games}}
     h2h, {(min_abbr, max_abbr): {wins_a, wins_b, ties}}
@@ -129,10 +137,13 @@ def _compute_all_stats() -> tuple[dict, dict, dict, dict]:
     div_records, {abbr: {wins, losses, ties, games}} (same-division games only)
     opponents, {abbr: [opp_abbr, ...]} for all completed games (SOS input)
 
+    winners_by_week, {week_number: [winning team abbrev, ...]} from the NFL
+    Locks database. A week missing from the dict has not been scored yet.
+
     Returns (overall_records, h2h, div_records, opponents).
     All 32 teams are always present in every dict; zeros for teams with no games.
     """
-    from NFL_Locks.utils.data_utils import load_full_schedule, load_week_file, get_all_week_files
+    from NFL_Locks.utils.data_utils import load_full_schedule
 
     schedule = load_full_schedule() or {}
     overall   = {a: _blank_record() for a in ALL_ABBREVS}
@@ -140,17 +151,17 @@ def _compute_all_stats() -> tuple[dict, dict, dict, dict]:
     h2h: dict[tuple, dict] = {}
     opponents: dict[str, list[str]] = defaultdict(list)
 
-    weeks = get_all_week_files()
+    weeks = sorted(winners_by_week)
     for week_num in weeks:
-        week_data = load_week_file(week_num)
-        if not week_data:
-            continue
-        winners_list = week_data.get("_winners") or []
+        winners_list = winners_by_week.get(week_num) or []
         if not winners_list:
             continue  # Week not yet scored
 
         winners  = set(winners_list)
-        matchups = week_data.get("matchups") or schedule.get(str(week_num), [])
+        matchups = schedule.get(str(week_num), [])
+        if not matchups:
+            logger.warning("locks_order: no schedule entry for week %s", week_num)
+            continue
 
         for game in matchups:
             away = game.get("away")
@@ -370,9 +381,34 @@ def identify_playoff_teams(
 
 # -- Draft order projection ----------------------------------------------------
 
-def project_draft_order() -> dict[str, list[int]]:
+async def load_winners_by_week() -> dict[int, list[str]]:
+    """Read every scored week of the current season from the NFL Locks DB.
+
+    The NFL Locks DB singleton is connected once in bot.py before extensions
+    load, so this only ever reads an already-open connection.
     """
-    Compute all stats from NFL Locks data and project next year's draft order.
+    from NFL_Locks.utils.database import get_db
+    from NFL_Locks.utils.schedule_utils import get_current_season, get_max_week
+
+    db = get_db()
+    season = get_current_season()
+    winners_by_week: dict[int, list[str]] = {}
+
+    for week in range(1, get_max_week() + 1):
+        winners = await db.get_winners(season, week)
+        if winners:
+            winners_by_week[week] = winners
+
+    logger.info(
+        "locks_order: loaded %d scored week(s) for season %s",
+        len(winners_by_week), season,
+    )
+    return winners_by_week
+
+
+def project_draft_order(winners_by_week: dict) -> dict[str, list[int]]:
+    """
+    Compute all stats from NFL Locks results and project next year's draft order.
 
     Non-playoff teams (18): picks 1–18, worst team gets pick 1.
     Playoff teams (14):     picks 19–32, worst playoff team (by seeding) gets 19.
@@ -383,7 +419,7 @@ def project_draft_order() -> dict[str, list[int]]:
 
     Returns {full_team_name: [pick_number]}.
     """
-    overall, h2h, div_recs, opponents = _compute_all_stats()
+    overall, h2h, div_recs, opponents = _compute_all_stats(winners_by_week)
     sos = _compute_sos(overall, opponents)
     playoff_teams, non_playoff_teams = identify_playoff_teams(overall, h2h, div_recs, sos)
 
@@ -411,13 +447,13 @@ def project_draft_order() -> dict[str, list[int]]:
 
 # -- Publicly exported helpers -------------------------------------------------
 
-def compute_team_records() -> dict[str, dict]:
+def compute_team_records(winners_by_week: dict) -> dict[str, dict]:
     """Return overall W-L-T records for all 32 teams. Convenience wrapper."""
-    overall, _, _, _ = _compute_all_stats()
+    overall, _, _, _ = _compute_all_stats(winners_by_week)
     return overall
 
 
-def record_summary() -> list[str]:
+def record_summary(winners_by_week: dict) -> list[str]:
     """
     Compute full stats, project draft order, and return one line per team.
 
@@ -427,11 +463,11 @@ def record_summary() -> list[str]:
 
     [NP] = non-playoff projected  [PL] = playoff projected
     """
-    overall, h2h, div_recs, opponents = _compute_all_stats()
+    overall, h2h, div_recs, opponents = _compute_all_stats(winners_by_week)
     sos = _compute_sos(overall, opponents)
     playoff_teams, _ = identify_playoff_teams(overall, h2h, div_recs, sos)
 
-    order = project_draft_order()
+    order = project_draft_order(winners_by_week)
     pick_by_full = {full: picks[0] for full, picks in order.items()}
 
     lines: list[str] = []
@@ -444,3 +480,13 @@ def record_summary() -> list[str]:
         pct    = _win_pct(rec)
         lines.append(f"{pick:2}. [{status}] {full:<26}  {w}-{l}-{t}  ({pct:.3f})")
     return lines
+
+
+def has_results(winners_by_week: dict) -> bool:
+    """True when at least one week has been scored.
+
+    Guards the sync against publishing a draft order built from nothing: with
+    no results every team is 0-0-0 and the order is just the final alphabetical
+    tiebreaker, which reads like a real projection but is not one.
+    """
+    return any(winners_by_week.get(w) for w in winners_by_week)

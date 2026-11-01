@@ -145,6 +145,9 @@ class TradeEval(commands.Cog):
         # Populated in cog_load once DB is connected:
         # {mode: {team_name: [picks]}}  e.g. {"mock": {"Minnesota Vikings": [18, 50, ...]}}
         self.draft_cache: dict = {}
+        # Weeks loaded by the last locks sync, {week: [winner abbrevs]}.
+        # Lets the sync command print the record summary without a second read.
+        self._last_locks_winners: dict = {}
 
     async def cog_load(self):
         """Async setup: open DB connection, load cache, start sync task."""
@@ -210,10 +213,24 @@ class TradeEval(commands.Cog):
         save to the 'locks' mode in the DB.
 
         Returns True on success, False if an exception occurred.
-        Pure local computation, reads NFL Locks week files, no HTTP requests.
+        Pure local computation, reads the NFL Locks DB, no HTTP requests.
+
+        Stores the winners it loaded on self._last_locks_winners so the sync
+        command can print the record summary without reading the DB twice.
         """
         try:
-            picks_by_team = locks_order.project_draft_order()
+            winners_by_week = await locks_order.load_winners_by_week()
+            self._last_locks_winners = winners_by_week
+
+            if not locks_order.has_results(winners_by_week):
+                # Without results every team is 0-0-0 and the "projection" is
+                # just the alphabetical tiebreaker. Refuse rather than publish
+                # an order that looks real.
+                logger.warning("_sync_locks_order: no scored weeks found, nothing to project")
+                await self.db.update_sync_status("locks", "failed", error="No scored weeks")
+                return False
+
+            picks_by_team = locks_order.project_draft_order(winners_by_week)
             if not picks_by_team:
                 logger.warning("_sync_locks_order: project_draft_order returned empty dict")
                 await self.db.update_sync_status("locks", "failed", error="No data computed")
@@ -962,7 +979,7 @@ class TradeEval(commands.Cog):
             ok = await self._sync_locks_order()
             if ok:
                 self.draft_cache["locks"] = await self.cache_mgr.load_to_memory("locks")
-                lines = locks_order.record_summary()
+                lines = locks_order.record_summary(self._last_locks_winners)
                 team_count = len(self.draft_cache["locks"])
                 # Show first 20 lines (non-playoff teams); playoff teams summarized
                 non_playoff_lines = [ln for ln in lines if "[NP]" in ln]
@@ -980,7 +997,10 @@ class TradeEval(commands.Cog):
                     f"```\n{summary}\n```"
                 )
             else:
-                await ctx.send("Locks sync failed. Check logs, NFL Locks week files may not be populated yet.")
+                await ctx.send(
+                    "Locks sync failed. Check logs. If no weeks have been scored yet "
+                    "there is nothing to project from."
+                )
 
     @commands.command(name="trade.cache.status")
     @commands.is_owner()
