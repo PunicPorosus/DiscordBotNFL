@@ -23,6 +23,10 @@ HEADER_BG   = (28,  29,  32)
 SEP_COL     = (63,  65,  71)
 TEXT        = (219, 222, 225)
 MUTED       = (148, 155, 164)
+
+# Trade note ("what is this trade for"), rendered under the title bar.
+NOTE_MAX_LINES = 2       # Two lines keeps the card a card rather than a letter
+NOTE_MAX_CHARS = 120     # Hard cap applied at parse time, before wrapping
 WHITE       = (255, 255, 255)
 RED_TEXT    = (237, 66,  69)
 WIN_ROW_BG  = (48,  72,  58)
@@ -107,6 +111,41 @@ def _strip_md(text):
     return text.replace("**", "")
 
 
+def _wrap_to_lines(draw, text, font, max_w, max_lines):
+    """Greedy word wrap, capped at max_lines with an ellipsis on the last one.
+
+    Measured against the real font rather than a character count, because the
+    display fonts here are proportional and a 60-character guess overflows on
+    wide text and wastes space on narrow text.
+    """
+    words = text.split()
+    lines = []
+    current = ""
+
+    for word in words:
+        trial = f"{current} {word}".strip()
+        if _tw(draw, trial, font) <= max_w or not current:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+            if len(lines) == max_lines:
+                break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    # Anything that did not fit gets an ellipsis on the final line.
+    consumed = sum(len(ln.split()) for ln in lines)
+    if consumed < len(words) and lines:
+        last = lines[-1]
+        while last and _tw(draw, last + "...", font) > max_w:
+            last = last.rsplit(" ", 1)[0] if " " in last else last[:-1]
+        lines[-1] = last + "..."
+
+    return lines
+
+
 def _draw_letterspaced(draw, text, font, cx, y, row_h, color,
                        stroke_width=0, stroke_fill=None, extra_px=0, align="center"):
     """Draw text with extra_px gap between each character.
@@ -133,7 +172,7 @@ def render(picks_a, picks_b,
            j_b, h_b, f_b, s_b,
            j_winner, h_winner, f_winner, s_winner,
            j_adv, h_adv, f_adv, s_adv,
-           close):
+           close, note=None):
     if not _PIL_AVAILABLE:
         return None
     try:
@@ -142,7 +181,7 @@ def render(picks_a, picks_b,
                        j_b, h_b, f_b, s_b,
                        j_winner, h_winner, f_winner, s_winner,
                        j_adv, h_adv, f_adv, s_adv,
-                       close)
+                       close, note)
     except Exception:
         logger.warning("Trade image render failed", exc_info=True)
         return None
@@ -153,7 +192,7 @@ def _render(picks_a, picks_b,
             j_b, h_b, f_b, s_b,
             j_winner, h_winner, f_winner, s_winner,
             j_adv, h_adv, f_adv, s_adv,
-            close):
+            close, note=None):
 
     # Supersampling scale and fonts, pulled from module-level cache (loaded once on import)
     SCALE      = _RENDER_SCALE
@@ -204,7 +243,16 @@ def _render(picks_a, picks_b,
     def side_block_h(n):
         return COL_HEAD_H + SEP_H + n * ROW_H + ROW_H
 
-    img_h = (TITLE_H + GAP
+    # The note sits under the title bar, so its wrapped height has to be known
+    # before the canvas is created. Measured on a throwaway surface.
+    NOTE_LINE_H = 22 * SCALE
+    note_lines = []
+    if note:
+        _probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        note_lines = _wrap_to_lines(_probe, note, F_SMALL, CONTENT_W, NOTE_MAX_LINES)
+    note_h = (len(note_lines) * NOTE_LINE_H) if note_lines else 0
+
+    img_h = (TITLE_H + note_h + GAP
              + side_block_h(len(picks_a)) + GAP
              + side_block_h(len(picks_b)) + GAP
              + SECTION_H + len(adv_plain) * ADV_LINE_H + GAP
@@ -229,7 +277,17 @@ def _render(picks_a, picks_b,
     _draw_centered(draw, title, F_TITLE,
                    (IMG_W - _tw(draw, title, F_TITLE)) // 2,
                    0, TITLE_H, WHITE, stroke_width=2 * SCALE, stroke_fill=(0, 0, 0))
-    y = TITLE_H + GAP
+    y = TITLE_H
+
+    # -- Trade note ---------------------------------------------------------
+    # Muted and centered, matching the footer's weight: context for the trade,
+    # not a competing headline.
+    for line in note_lines:
+        lw = _tw(draw, line, F_SMALL)
+        _draw_centered(draw, line, F_SMALL, (IMG_W - lw) // 2, y, NOTE_LINE_H, MUTED)
+        y += NOTE_LINE_H
+
+    y += GAP
 
     def draw_side(picks, j_tot, h_tot, f_tot, s_tot, side_key):
         nonlocal y

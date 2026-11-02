@@ -264,14 +264,20 @@ class TradeEval(commands.Cog):
           +3R1     -- 3 years from now, Round 1 (max +3)
           27R2     -- 2027 Round 2 (absolute year format, must be after current year)
 
+        Notes:
+          Anything after "|" or "//" is a free-text note drawn on the image,
+          e.g. !trade R1 for 7.32 | moving up for a QB
+
         Examples:
           !trade 31 178 for 41 186 +1R2
           !trade 13 for +1R1 +2R2
+          !trade R1 + 28R1 for 7.32 // what is this trade for
         """
         if not args:
             await ctx.send(
-                "**Usage:** `!trade <Side A picks> for <Side B picks>`\n"
+                "**Usage:** `!trade <Side A picks> for <Side B picks> | note`\n"
                 "**Examples:** `!trade 31 R6 for R3 +1R2`\n"
+                "`!trade R1 for 7.32 | moving up for a QB`  (note after `|` or `//`)\n"
                 "**Pick formats:**\n"
                 "• `31`: overall pick number\n"
                 "• `R3`: current year, mid-3rd-round pick\n"
@@ -281,6 +287,11 @@ class TradeEval(commands.Cog):
                 "• `27R2`: 2027 Round 2 (must be after current year)"
             )
             return
+
+        # Pull the note off first. The pick regex grabs bare numbers from
+        # anywhere in the string, so a note left inline would donate its digits
+        # to a side ("...for a QB in 2 years" adds pick 2).
+        args, note = trade_logic.split_note(args)
 
         # Determine separator: newline (multi-line input) or "for"
         normalized = args.lower()
@@ -418,7 +429,7 @@ class TradeEval(commands.Cog):
             j_b, h_b, f_b, s_b,
             j_winner, h_winner, f_winner, s_winner,
             j_adv, h_adv, f_adv, s_adv,
-            close,
+            close, note,
         )
 
         if image_buf:
@@ -435,7 +446,14 @@ class TradeEval(commands.Cog):
                 logger.warning("Failed to send trade image", exc_info=True)
 
         # Fallback: text embed (Pillow not installed, render error, or missing permissions)
-        embed = discord.Embed(title="NFL Trade Evaluator", color=embed_color)
+        # The note belongs in the image, so it appears here only because there
+        # is no image: this embed IS the card. It is already stripped of "@"
+        # by sanitize_note, and the send disables mentions as well.
+        embed = discord.Embed(
+            title="NFL Trade Evaluator",
+            description=note or None,
+            color=embed_color,
+        )
         embed.add_field(name="​", value=f"```\n{side_a_text}\n```", inline=False)
         embed.add_field(name="​", value=f"```\n{side_b_text}\n```", inline=False)
         embed.add_field(
@@ -444,7 +462,7 @@ class TradeEval(commands.Cog):
             inline=False
         )
         embed.set_footer(text="Future picks: one round penalty per year (2027 R1 = 2026 R2 value, etc.)")
-        await ctx.send(embed=embed)
+        await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
     # -- Trade finder helpers -----------------------------------------------
 

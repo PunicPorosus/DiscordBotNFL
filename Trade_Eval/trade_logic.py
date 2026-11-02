@@ -533,3 +533,56 @@ def find_trade_up(target_pick: int, give_pick: int, chart: str, tolerance_pct: f
             return solutions[0]
     
     return None
+
+
+# -- Trade note ----------------------------------------------------------------
+
+# A trade note is free text typed by a user and drawn into an image with the
+# bundled display fonts. Those fonts carry printable ASCII and nothing else, so
+# an emoji or an accented character renders as an empty box rather than failing
+# loudly. Anything outside that range is dropped.
+#
+# "@" is removed outright. The note is user-supplied text and the embed
+# fallback path puts it in a Discord message, where @everyone would ping the
+# server. Stripping the character is simpler and more durable than relying on
+# every send site to pass allowed_mentions.
+_NOTE_ALLOWED = set(chr(c) for c in range(0x20, 0x7F)) - {"@"}
+
+
+def sanitize_note(text: str, max_chars: int = 120) -> "str | None":
+    """Clean a user-supplied trade note. Returns None when nothing is left."""
+    if not text:
+        return None
+
+    kept = "".join(ch for ch in text if ch in _NOTE_ALLOWED)
+    kept = " ".join(kept.split())       # collapse runs of whitespace
+    if not kept:
+        return None
+
+    if len(kept) > max_chars:
+        kept = kept[:max_chars].rstrip() + "..."
+    return kept
+
+
+def split_note(args: str) -> "tuple[str, str | None]":
+    """Split a trade command into (picks text, note).
+
+    The note is separated by "|" or "//" and must be removed BEFORE pick
+    parsing, not ignored during it: the pick regex captures any bare 1-3 digit
+    number anywhere in the string, so "moving up for a QB in 2 years" would
+    otherwise contribute pick 2 to whichever side it trailed.
+    """
+    if not args:
+        return args, None
+
+    cut = None
+    for sep in ("|", "//"):
+        idx = args.find(sep)
+        if idx != -1 and (cut is None or idx < cut[0]):
+            cut = (idx, sep)
+
+    if cut is None:
+        return args, None
+
+    idx, sep = cut
+    return args[:idx], sanitize_note(args[idx + len(sep):])
